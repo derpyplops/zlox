@@ -1,4 +1,5 @@
 import zio._
+import zio.UIO
 import scala.io.Source
 import java.io.IOException
 
@@ -62,12 +63,164 @@ object Lox extends ZIOAppDefault {
 }
 
 class Scanner(val source: String) {
-  val tokens: List[Token] = List()
+  var tokens: Array[Token] = Array()
   var start: Int = 0
   var current: Int = 0
   var line: Int = 1
 
-  def scanTokens: UIO[List[Token]] = ZIO.succeed(List())
+  def scanTokens: UIO[Array[Token]] = {
+    println("hi")
+    while (!isAtEnd()) {
+      start = current
+      scanToken()
+    }
+
+    tokens :+ Token(TokenType.EOF, "", null, line)
+    return ZIO.succeed(tokens)
+  }
+
+  def isAtEnd(): Boolean = {
+    println("current: " + current)
+    current >= source.length
+  }
+
+  def scanToken(): Unit = {
+    val c = advance()
+    println("c: " + c)
+    c match {
+      case '(' => addToken(TokenType.LEFT_PAREN)
+      case ')' => addToken(TokenType.RIGHT_PAREN)
+      case '{' => addToken(TokenType.LEFT_BRACE)
+      case '}' => addToken(TokenType.RIGHT_BRACE)
+      case ',' => addToken(TokenType.COMMA)
+      case '.' => addToken(TokenType.DOT)
+      case '-' => addToken(TokenType.MINUS)
+      case '+' => addToken(TokenType.PLUS)
+      case ';' => addToken(TokenType.SEMICOLON)
+      case '*' => addToken(TokenType.STAR)
+      case '!' => addToken(if (matchChar('=')) TokenType.BANG_EQUAL else TokenType.BANG)
+      case '=' => addToken(if (matchChar('=')) TokenType.EQUAL_EQUAL else TokenType.EQUAL)
+      case '<' => addToken(if (matchChar('=')) TokenType.LESS_EQUAL else TokenType.LESS)
+      case '>' => addToken(if (matchChar('=')) TokenType.GREATER_EQUAL else TokenType.GREATER)
+      case '/' => if (matchChar('/')) {
+        while (peek() != '\n' && !isAtEnd()) advance()
+      } else {
+        addToken(TokenType.SLASH)
+      }
+      case ' ' => ()
+      case '\r' => ()
+      case '\t' => ()
+      case '\n' => line += 1
+      case '"' => string()
+      case _ => if (isDigit(c)) {
+        number()
+      } else if (isAlpha(c)) {
+        identifier()
+      } else {
+        Lox.error(line, "Unexpected character.")
+      }
+    }
+  }
+
+  def identifier(): Unit = {
+    while (isAlphaNumeric(peek())) advance()
+
+    val text = source.substring(start, current)
+    val tokenType = keywords.getOrElse(text, TokenType.IDENTIFIER)
+    addToken(tokenType)
+  }
+
+  def advance(): Char = {
+    current += 1
+    source.charAt(current - 1)
+  }
+
+  def addToken(tokenType: TokenType): Unit = {
+    addToken(tokenType, null)
+  }
+
+  def addToken(tokenType: TokenType, literal: Any): Unit = {
+    val text = source.substring(start, current)
+    tokens :+= Token(tokenType, text, literal, line)
+    println("here")
+  }
+
+  def matchChar(expected: Char): Boolean = {
+    if (isAtEnd()) return false
+    if (source.charAt(current) != expected) return false
+
+    current += 1
+    true
+  }
+
+  def peek(): Char = {
+    if (isAtEnd()) return '\u0000'
+    source.charAt(current)
+  }
+
+  def peekNext(): Char = {
+    if (current + 1 >= source.length) return '\u0000'
+    source.charAt(current + 1)
+  }
+
+  def string(): Unit = {
+    while (peek() != '"' && !isAtEnd()) {
+      if (peek() == '\n') line += 1
+      advance()
+    }
+
+    if (isAtEnd()) {
+      Lox.error(line, "Unterminated string.")
+      return
+    }
+
+    advance()
+
+    val value = source.substring(start + 1, current - 1)
+    addToken(TokenType.STRING, value)
+  }
+
+  def number(): Unit = {
+    while (isDigit(peek())) advance()
+
+    if (peek() == '.' && isDigit(peekNext())) {
+      advance()
+      while (isDigit(peek())) advance()
+    }
+
+    addToken(TokenType.NUMBER, source.substring(start, current).toDouble)
+  }
+
+  def isDigit(c: Char): Boolean = {
+    c >= '0' && c <= '9'
+  }
+
+  def isAlpha(c: Char): Boolean = {
+    (c >= 'a' && c <= 'z') ||
+    (c >= 'A' && c <= 'Z') ||
+    c == '_'
+  }
+
+  def isAlphaNumeric(c: Char): Boolean = isAlpha(c) || isDigit(c)
+
+  val keywords: Map[String, TokenType] = Map(
+    "and" -> TokenType.AND,
+    "class" -> TokenType.CLASS,
+    "else" -> TokenType.ELSE,
+    "false" -> TokenType.FALSE,
+    "for" -> TokenType.FOR,
+    "fun" -> TokenType.FUN,
+    "if" -> TokenType.IF,
+    "nil" -> TokenType.NIL,
+    "or" -> TokenType.OR,
+    "print" -> TokenType.PRINT,
+    "return" -> TokenType.RETURN,
+    "super" -> TokenType.SUPER,
+    "this" -> TokenType.THIS,
+    "true" -> TokenType.TRUE,
+    "var" -> TokenType.VAR,
+    "while" -> TokenType.WHILE
+  )
 }
 
 enum TokenType {
