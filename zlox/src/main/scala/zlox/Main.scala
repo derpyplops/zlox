@@ -232,3 +232,16 @@ enum TokenType {
 }
 
 case class Token(tokenType: TokenType, lexeme: String, literal: Any, line: Int)
+
+sealed trait Expr
+case class Binary(left: Expr, operator: Token, right: Expr) extends Expr
+case class Grouping(expression: Expr) extends Expr
+case class Literal(value: Any) extends Expr
+case class Unary(operator: Token, right: Expr) extends Expr
+
+def printAst(expr: Expr): String = expr match {
+  case Binary(left, op, right) => s"(${op.lexeme} ${printAst(left)} ${printAst(right)})"
+  case Grouping(expr) => s"(group ${printAst(expr)})"
+  case Literal(value) => if (value == null) "nil" else value.toString
+  case Unary(op, right) => s"(${op.lexeme} ${printAst(right)})"
+}
