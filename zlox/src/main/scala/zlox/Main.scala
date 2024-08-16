@@ -54,8 +54,8 @@ object Lox extends ZIOAppDefault {
   def run(source: String): ZIO[Console, IOException, Unit] = for {
     scanner <- ZIO.succeed(new Scanner(source))
     tokens <- scanner.scanTokens
-    expr <- Parser(tokens).parse().orDie // TODO handle error
-  } yield Interpreter.interpret(expr)
+    stmts <- Parser(tokens).parse().catchAll(_ => ZIO.succeed(List()))
+  } yield Interpreter.interpret(stmts)
 
   def error(line: Int, message: String): Unit = {
     report(line, "", message)
@@ -94,7 +94,6 @@ class Scanner(val source: String) {
 
   def scanToken(): Unit = {
     val c = advance()
-    println("c: " + c)
     c match {
       case '(' => addToken(TokenType.LEFT_PAREN)
       case ')' => addToken(TokenType.RIGHT_PAREN)
@@ -246,6 +245,10 @@ case class Grouping(expression: Expr) extends Expr
 case class Literal(value: Any) extends Expr
 case class Unary(operator: Token, right: Expr) extends Expr
 
+sealed trait Stmt
+case class Expression(expr: Expr) extends Stmt
+case class Print(expr: Expr) extends Stmt
+
 def printAst(expr: Expr): String = expr match {
   case Binary(left, op, right) => s"(${op.lexeme} ${printAst(left)} ${printAst(right)})"
   case Grouping(expr) => s"(group ${printAst(expr)})"
@@ -256,13 +259,35 @@ def printAst(expr: Expr): String = expr match {
 class Parser(tokens: Array[Token]) {
   var current: Int = 0
 
-  case class ParseError() extends RuntimeException
+  case class ParseError(message: String) extends RuntimeException(message)
 
-  def parse(): ZIO[Any, ParseError, Expr] = {
+  def parse(): ZIO[Any, ParseError, List[Stmt]] = {
     try
-      ZIO.succeed(expression())
+      var stmts: List[Stmt] = List()
+      while (!isAtEnd()) {
+        stmts = stmts.appended(statement())
+      }
+      ZIO.succeed(stmts)
     catch 
       case (error: ParseError) => ZIO.fail(error)
+  }
+
+  def statement(): Stmt = {
+    if (peek().tokenType == TokenType.PRINT) printStmt()
+    else exprStmt()
+  }
+
+  def exprStmt(): Stmt = {
+    val exprStmt = Expression(expression())
+    consume(TokenType.SEMICOLON, "Expected semicolon")
+    exprStmt
+  }
+
+  def printStmt(): Stmt = {
+    consume(TokenType.PRINT, "Expected print")
+    val expr = expression()
+    consume(TokenType.SEMICOLON, "Expected semicolon")
+    Print(expr)
   }
 
   def expression(): Expr = equality()
@@ -347,8 +372,8 @@ class Parser(tokens: Array[Token]) {
 
   def error(token: Token, message: String): ParseError = {
     Lox.error(token.line, message)
-    ParseError()
-  }
+    ParseError(message)
+  } 
 
   // def left_assoc(lower: () => Expr, tokenTypes: TokenType*): Expr = {
   //   var expr = lower()
@@ -404,10 +429,11 @@ class Parser(tokens: Array[Token]) {
 }
 
 object Interpreter {  // singleton
-  def interpret(expr: Expr): Unit = {
+  def interpret(program: List[Stmt]): Unit = {
     try 
-      val value = eval(expr)
-      println(value)
+      for {
+        stmt <- program
+      } exec(stmt)
     catch
       case (error: RuntimeError) => Lox.runtimeError(error)
   }
@@ -419,6 +445,17 @@ object Interpreter {  // singleton
       case (a: Double, b: Double) => return
       case _ => throw new RuntimeError(operator, "Operands must be numbers.")
     }
+
+  private def exec(stmt: Stmt): Unit = {
+    stmt match {
+      case Expression(expr) => { 
+        eval(expr)
+        ()
+      }
+      case Print(expr) => println(eval(expr))
+    }
+  }
+
   private def eval(expr: Expr): Any = {
     expr match {
       case Binary(left, op, right) => {
