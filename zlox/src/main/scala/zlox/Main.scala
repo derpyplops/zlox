@@ -2,6 +2,7 @@ import zio._
 import zio.UIO
 import scala.io.Source
 import java.io.IOException
+import scala.util.boundary, boundary.break
 
 object Lox extends ZIOAppDefault {
 
@@ -244,4 +245,156 @@ def printAst(expr: Expr): String = expr match {
   case Grouping(expr) => s"(group ${printAst(expr)})"
   case Literal(value) => if (value == null) "nil" else value.toString
   case Unary(op, right) => s"(${op.lexeme} ${printAst(right)})"
+}
+
+object Parser {
+  var tokens: Array[Token] = Array()
+  var current: Int = 0
+
+  case class ParseError() extends RuntimeException
+
+  def parse(): Expr = {
+    try {
+      expression()
+    } catch {
+      case e: ParseError => null
+    }
+  }
+
+  def expression(): Expr = equality()
+
+  def equality(): Expr = {
+    var expr = comparison()
+
+    while (matchToken(TokenType.BANG_EQUAL, TokenType.EQUAL_EQUAL)) {
+      val operator = previous()
+      val right = comparison()
+      expr = Binary(expr, operator, right)
+    }
+
+    expr
+  }
+
+  def comparison(): Expr = {
+    var expr = term()
+
+    while (matchToken(TokenType.GREATER, TokenType.GREATER_EQUAL, TokenType.LESS, TokenType.LESS_EQUAL)) {
+      val operator = previous()
+      val right = term()
+      expr = Binary(expr, operator, right)
+    }
+
+    expr
+  }
+
+  def term(): Expr = {
+    var expr = factor()
+
+    while (matchToken(TokenType.MINUS, TokenType.PLUS)) {
+      val operator = previous()
+      val right = factor()
+      expr = Binary(expr, operator, right)
+    }
+
+    expr
+  }
+
+  def factor(): Expr = {
+    var expr = unary()
+
+    while (matchToken(TokenType.SLASH, TokenType.STAR)) {
+      val operator = previous()
+      val right = unary()
+      expr = Binary(expr, operator, right)
+    }
+
+    expr
+  }
+
+  def unary(): Expr = {
+    if (matchToken(TokenType.BANG, TokenType.MINUS)) {
+      val operator = previous()
+      val right = unary()
+      Unary(operator, right)
+    } else {
+      primary()
+    }
+  }
+
+  def primary(): Expr = {
+    if (matchToken(TokenType.FALSE)) return Literal(false)
+    if (matchToken(TokenType.TRUE)) return Literal(true)
+    if (matchToken(TokenType.NIL)) return Literal(null)
+    if (matchToken(TokenType.NUMBER, TokenType.STRING)) {
+      return Literal(previous().literal)
+    }
+    if (matchToken(TokenType.LEFT_PAREN)) {
+      val expr = expression()
+      consume(TokenType.RIGHT_PAREN, "Expect ')' after expression.")
+      return Grouping(expr)
+    }
+    throw error(peek(), "Expect expression.")
+  }
+
+  def consume(tokenType: TokenType, message: String): Token = {
+    if (check(tokenType)) return advance()
+    throw error(peek(), message)
+  }
+
+  def error(token: Token, message: String): ParseError = {
+    Lox.error(token.line, message)
+    ParseError()
+  }
+
+  // def left_assoc(lower: () => Expr, tokenTypes: TokenType*): Expr = {
+  //   var expr = lower()
+
+  //   while (matchToken(tokenTypes*)) {
+  //     val operator = previous()
+  //     val right = lower()
+  //     expr = Binary(expr, operator, right)
+  //   }
+
+  //   expr
+  // }
+
+
+  def matchToken(types: TokenType*): Boolean = {
+    boundary:
+      for (tokenType <- types) {
+        if (check(tokenType)) {
+          advance()
+          break(true)
+        }
+      }
+
+      false
+  }
+
+  def check(tokenType: TokenType): Boolean = 
+    !isAtEnd() && peek().tokenType == tokenType
+
+  def peek(): Token = tokens(current)
+
+  def advance(): Token = {
+    if (!isAtEnd()) current += 1
+    previous()
+  }
+
+  def isAtEnd(): Boolean = peek().tokenType == TokenType.EOF
+
+  def previous(): Token = tokens(current - 1)
+
+  def synchronize(): Unit = {
+    advance()
+
+    while (!isAtEnd()) {
+      if (previous().tokenType == TokenType.SEMICOLON) return
+
+      peek().tokenType match {
+        case TokenType.CLASS | TokenType.FUN | TokenType.VAR | TokenType.FOR | TokenType.IF | TokenType.WHILE | TokenType.PRINT | TokenType.RETURN => return
+        case _ => advance()
+      }
+    }
+  }
 }
