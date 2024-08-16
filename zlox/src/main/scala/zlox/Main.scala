@@ -7,6 +7,7 @@ import scala.util.boundary, boundary.break
 object Lox extends ZIOAppDefault {
 
   var hadError: Boolean = false
+  var hadRuntimeError: Boolean = false
 
   override def run =
     program.provide(
@@ -18,9 +19,12 @@ object Lox extends ZIOAppDefault {
     args <- ZIOAppArgs.getArgs
     exitCode <- args.toList match {
       case Nil => runPrompt.as(ExitCode.success)
-      case file :: Nil => runFile(file).map { _ =>
-        if (hadError) ExitCode(65) else ExitCode.success
-      }
+      case file :: Nil => runFile(file)
+        .as {
+          if (hadError) ExitCode(65)
+          else if (hadRuntimeError) ExitCode(70) 
+          else ExitCode.success
+        }
       case _ => Console.printLine("Usage: zlox [script]").as(ExitCode.failure)
     }
     _ <- exit(exitCode)
@@ -50,8 +54,8 @@ object Lox extends ZIOAppDefault {
   def run(source: String): ZIO[Console, IOException, Unit] = for {
     scanner <- ZIO.succeed(new Scanner(source))
     tokens <- scanner.scanTokens
-    _ <- ZIO.foreach(tokens)(token => Console.printLine(token.toString))
-  } yield ()
+    expr <- Parser(tokens).parse().orDie // TODO handle error
+  } yield Interpreter.interpret(expr)
 
   def error(line: Int, message: String): Unit = {
     report(line, "", message)
@@ -60,6 +64,11 @@ object Lox extends ZIOAppDefault {
   def report(line: Int, where: String, message: String): Unit = {
     Console.printError(s"[line $line] Error$where: $message")
     hadError = true
+  }
+
+  def runtimeError(error: RuntimeError) = {
+    println(error.getMessage() +"\n[line " + error.token.line + "]")
+    hadRuntimeError = true
   }
 }
 
@@ -70,18 +79,16 @@ class Scanner(val source: String) {
   var line: Int = 1
 
   def scanTokens: UIO[Array[Token]] = {
-    println("hi")
     while (!isAtEnd()) {
       start = current
       scanToken()
     }
 
-    tokens :+ Token(TokenType.EOF, "", null, line)
+    tokens :+= Token(TokenType.EOF, "", null, line)
     return ZIO.succeed(tokens)
   }
 
   def isAtEnd(): Boolean = {
-    println("current: " + current)
     current >= source.length
   }
 
@@ -143,7 +150,6 @@ class Scanner(val source: String) {
   def addToken(tokenType: TokenType, literal: Any): Unit = {
     val text = source.substring(start, current)
     tokens :+= Token(tokenType, text, literal, line)
-    println("here")
   }
 
   def matchChar(expected: Char): Boolean = {
@@ -247,18 +253,16 @@ def printAst(expr: Expr): String = expr match {
   case Unary(op, right) => s"(${op.lexeme} ${printAst(right)})"
 }
 
-object Parser {
-  var tokens: Array[Token] = Array()
+class Parser(tokens: Array[Token]) {
   var current: Int = 0
 
   case class ParseError() extends RuntimeException
 
-  def parse(): Expr = {
-    try {
-      expression()
-    } catch {
-      case e: ParseError => null
-    }
+  def parse(): ZIO[Any, ParseError, Expr] = {
+    try
+      ZIO.succeed(expression())
+    catch 
+      case (error: ParseError) => ZIO.fail(error)
   }
 
   def expression(): Expr = equality()
@@ -398,3 +402,96 @@ object Parser {
     }
   }
 }
+
+object Interpreter {  // singleton
+  def interpret(expr: Expr): Unit = {
+    try 
+      val value = eval(expr)
+      println(value)
+    catch
+      case (error: RuntimeError) => Lox.runtimeError(error)
+  }
+  private def checkNumberOperand(operator: Token, operand: Any): Unit =
+    if (!operand.isInstanceOf[Double]) throw new RuntimeError(operator, "Operand must be a number.")
+
+  private def checkNumberOperands(operator: Token, left: Any, right: Any): Unit =
+    (left, right) match {
+      case (a: Double, b: Double) => return
+      case _ => throw new RuntimeError(operator, "Operands must be numbers.")
+    }
+  private def eval(expr: Expr): Any = {
+    expr match {
+      case Binary(left, op, right) => {
+        val leftVal = eval(left)
+        val rightVal = eval(right)
+        op.tokenType match {
+          case TokenType.MINUS => {
+            checkNumberOperands(op, leftVal, rightVal)
+            leftVal.asInstanceOf[Double] - rightVal.asInstanceOf[Double]
+          }
+          case TokenType.PLUS => {
+            (leftVal, rightVal) match {
+              case (a: Double, b: Double) => a + b
+              case (a: String, b: String) => a + b
+              case _ => throw new RuntimeError(op, "Operands must be two numbers or two strings.")
+            }
+          }
+          case TokenType.SLASH => {
+            checkNumberOperands(op, leftVal, rightVal)
+            leftVal.asInstanceOf[Double] / rightVal.asInstanceOf[Double]
+          }
+          case TokenType.STAR => {
+            checkNumberOperands(op, leftVal, rightVal)
+            leftVal.asInstanceOf[Double] * rightVal.asInstanceOf[Double]
+          }
+          case TokenType.GREATER => {
+            checkNumberOperands(op, leftVal, rightVal)
+            leftVal.asInstanceOf[Double] > rightVal.asInstanceOf[Double]
+          }
+          case TokenType.GREATER_EQUAL => {
+            checkNumberOperands(op, leftVal, rightVal)
+            leftVal.asInstanceOf[Double] >= rightVal.asInstanceOf[Double]
+          }
+          case TokenType.LESS => {
+            checkNumberOperands(op, leftVal, rightVal)
+            leftVal.asInstanceOf[Double] < rightVal.asInstanceOf[Double]
+          }
+          case TokenType.LESS_EQUAL => {
+            checkNumberOperands(op, leftVal, rightVal)
+            leftVal.asInstanceOf[Double] <= rightVal.asInstanceOf[Double]
+          }
+          case TokenType.BANG_EQUAL => !isEqual(leftVal, rightVal)
+          case TokenType.EQUAL_EQUAL => isEqual(leftVal, rightVal)
+          case _ => null
+        }
+      }
+      case Grouping(expression) => eval(expression)
+      case Literal(value) => value
+      case Unary(op, right) => {
+        val rightVal = eval(right)
+        checkNumberOperand(op, right)
+        op.tokenType match {
+          case TokenType.MINUS => -rightVal.asInstanceOf[Double]
+          case TokenType.BANG => !isTruthy(rightVal)
+          case _ => null // unreachable todo fix
+        }
+      }
+    }
+  }
+
+  private def isTruthy(value: Any): Boolean = {
+    value match {
+      case null => false
+      case false => false
+      case _ => true
+    }
+  }
+
+  private def isEqual(a: Any, b: Any): Boolean = {
+    if (a == null && b == null) return true
+    if (a == null) return false
+    a == b
+  }
+}
+
+case class RuntimeError(token: Token, message: String) extends RuntimeException(message)
