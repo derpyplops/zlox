@@ -60,8 +60,9 @@ object Lox extends ZIOAppDefault {
   def run(source: String): ZIO[Console, IOException, Unit] = for {
     scanner <- ZIO.succeed(new Scanner(source))
     tokens <- scanner.scanTokens
-    _=println(tokens.toList)
+    // _=println(tokens.toList)
     stmts <- Parser(tokens).parse()
+    // _ = println(stmts)
   } yield Interpreter.interpret(stmts)
 
   def error(line: Int, message: String) = {
@@ -74,7 +75,6 @@ object Lox extends ZIOAppDefault {
   }
 
   def handleParseError(error: ParseError) = {
-    println("adf")
     hadRuntimeError = true
     Console.printLine(error.getMessage())
   }
@@ -254,13 +254,15 @@ sealed trait Stmt
 case class Expression(expr: Expr) extends Stmt
 case class Print(expr: Expr) extends Stmt
 case class Var(name: Token, initializer: Option[Expr]) extends Stmt
+case class Block(statements: List[Stmt]) extends Stmt
 
 def printAst(expr: Expr): String = expr match {
   case Binary(left, op, right) => s"(${op.lexeme} ${printAst(left)} ${printAst(right)})"
   case Grouping(expr) => s"(group ${printAst(expr)})"
   case Literal(value) => if (value == None) "nil" else value.toString
   case Unary(op, right) => s"(${op.lexeme} ${printAst(right)})"
-  case Variable(name) => s"name=${name}"
+  case Variable(name) => s"(name:=${name})"
+  case Assign(name, value) => s"(assign (${name} -> ${value}))"
 }
 
 class Parser(tokens: Array[Token]) {
@@ -270,8 +272,8 @@ class Parser(tokens: Array[Token]) {
     try
       var stmts: List[Stmt] = List()
       while (!isAtEnd()) {
-        val maybeDeclaration = declaration()
-        stmts = stmts ++ maybeDeclaration
+        val dec = declaration()
+        stmts = stmts ++ dec.toSeq
       }
       ZIO.succeed(stmts)
     catch
@@ -285,14 +287,15 @@ class Parser(tokens: Array[Token]) {
       }
   }
 
-  def declaration(): Option[Stmt] = {
+  def declaration(): Either[ParseError, Stmt] = {
     try
-      if (matchToken(VAR)) Some(varDeclaration())
-      else return Some(statement())
+      if (matchToken(VAR)) Right(varDeclaration())
+      else return Right(statement())
     catch
       case e: ParseError => {
+        println(e)
         synchronize()
-        None
+        Left(e)
       }
   }
 
@@ -303,9 +306,21 @@ class Parser(tokens: Array[Token]) {
     Var(name, initializer)
   }
 
+  def block(): List[Stmt] = {
+    var statements: Array[Stmt] = Array.empty
+    while (!check(RIGHT_BRACE) && !isAtEnd()) {
+      declaration()
+    }
+    consume(RIGHT_BRACE, "Expect }")
+    statements.toList
+  }
+
   def statement(): Stmt = {
-    print("statemnt")
-    if (peek().tokenType == PRINT) printStmt()
+    if (peek().tokenType == PRINT) {
+      val stmt = printStmt()
+      return stmt
+    }
+    if (matchToken(LEFT_BRACE)) Block(block())
     else exprStmt()
   }
 
@@ -316,7 +331,6 @@ class Parser(tokens: Array[Token]) {
   }
 
   def printStmt(): Stmt = {
-    println("print stmt")
     consume(PRINT, "Expected print")
     val expr = expression()
     consume(SEMICOLON, "Expected semicolon")
@@ -481,14 +495,16 @@ class Parser(tokens: Array[Token]) {
 }
 
 object Interpreter {  // singleton
-  private val env = Environment()
+  private var env = Environment()
   def interpret(program: List[Stmt]): Unit = {
     try 
       for {
         stmt <- program
       } exec(stmt)
     catch
-      case (error: RuntimeError) => Lox.runtimeError(error)
+      case (error: RuntimeError) => {
+        println(error)
+      }
   }
   private def checkNumberOperand(operator: Token, operand: Any): Unit =
     if (!operand.isInstanceOf[Double]) throw new RuntimeError(operator, "Operand must be a number.")
@@ -506,10 +522,17 @@ object Interpreter {  // singleton
         ()
       }
       case Print(expr) => println(eval(expr))
-      case Var(name, initializer) => {
-        println(name)
-        println(initializer)
-        env.define(name.lexeme, initializer.map(eval))
+      case Var(name, Some(expr)) => { // isn't there a way to simplify this
+        env.define(name.lexeme, eval(expr))
+      }
+      case Var(name, None) => env.define(name.lexeme, None)
+      case Block(statements) => {
+        val prev = env
+        try
+          env = Environment.withEnclosing(prev)
+          statements.foreach(exec)
+        finally
+          env = prev
       }
     }
   }
