@@ -1,8 +1,14 @@
+package org.zlox.zlox.Main
+
 import zio._
 import zio.UIO
 import scala.io.Source
 import java.io.IOException
 import scala.util.boundary, boundary.break
+import org.zlox.zlox.Token._
+import TokenType.*
+import org.zlox.zlox.Environment.Environment
+import org.zlox.zlox.Main.Parser.ParseError
 
 object Lox extends ZIOAppDefault {
 
@@ -54,21 +60,28 @@ object Lox extends ZIOAppDefault {
   def run(source: String): ZIO[Console, IOException, Unit] = for {
     scanner <- ZIO.succeed(new Scanner(source))
     tokens <- scanner.scanTokens
-    stmts <- Parser(tokens).parse().catchAll(_ => ZIO.succeed(List()))
+    _=println(tokens.toList)
+    stmts <- Parser(tokens).parse()
   } yield Interpreter.interpret(stmts)
 
-  def error(line: Int, message: String): Unit = {
+  def error(line: Int, message: String) = {
     report(line, "", message)
   }
 
-  def report(line: Int, where: String, message: String): Unit = {
-    Console.printError(s"[line $line] Error$where: $message")
+  def report(line: Int, where: String, message: String) = {
     hadError = true
+    Console.printLine(s"[line $line] Error$where: $message")
+  }
+
+  def handleParseError(error: ParseError) = {
+    println("adf")
+    hadRuntimeError = true
+    Console.printLine(error.getMessage())
   }
 
   def runtimeError(error: RuntimeError) = {
-    println(error.getMessage() +"\n[line " + error.token.line + "]")
     hadRuntimeError = true
+    Console.printLine(error.getMessage() +"\n[line " + error.token.line + "]")
   }
 }
 
@@ -84,7 +97,7 @@ class Scanner(val source: String) {
       scanToken()
     }
 
-    tokens :+= Token(TokenType.EOF, "", null, line)
+    tokens :+= Token(EOF, "", None, line)
     return ZIO.succeed(tokens)
   }
 
@@ -95,24 +108,24 @@ class Scanner(val source: String) {
   def scanToken(): Unit = {
     val c = advance()
     c match {
-      case '(' => addToken(TokenType.LEFT_PAREN)
-      case ')' => addToken(TokenType.RIGHT_PAREN)
-      case '{' => addToken(TokenType.LEFT_BRACE)
-      case '}' => addToken(TokenType.RIGHT_BRACE)
-      case ',' => addToken(TokenType.COMMA)
-      case '.' => addToken(TokenType.DOT)
-      case '-' => addToken(TokenType.MINUS)
-      case '+' => addToken(TokenType.PLUS)
-      case ';' => addToken(TokenType.SEMICOLON)
-      case '*' => addToken(TokenType.STAR)
-      case '!' => addToken(if (matchChar('=')) TokenType.BANG_EQUAL else TokenType.BANG)
-      case '=' => addToken(if (matchChar('=')) TokenType.EQUAL_EQUAL else TokenType.EQUAL)
-      case '<' => addToken(if (matchChar('=')) TokenType.LESS_EQUAL else TokenType.LESS)
-      case '>' => addToken(if (matchChar('=')) TokenType.GREATER_EQUAL else TokenType.GREATER)
+      case '(' => addToken(LEFT_PAREN)
+      case ')' => addToken(RIGHT_PAREN)
+      case '{' => addToken(LEFT_BRACE)
+      case '}' => addToken(RIGHT_BRACE)
+      case ',' => addToken(COMMA)
+      case '.' => addToken(DOT)
+      case '-' => addToken(MINUS)
+      case '+' => addToken(PLUS)
+      case ';' => addToken(SEMICOLON)
+      case '*' => addToken(STAR)
+      case '!' => addToken(if (matchChar('=')) BANG_EQUAL else BANG)
+      case '=' => addToken(if (matchChar('=')) EQUAL_EQUAL else EQUAL)
+      case '<' => addToken(if (matchChar('=')) LESS_EQUAL else LESS)
+      case '>' => addToken(if (matchChar('=')) GREATER_EQUAL else GREATER)
       case '/' => if (matchChar('/')) {
         while (peek() != '\n' && !isAtEnd()) advance()
       } else {
-        addToken(TokenType.SLASH)
+        addToken(SLASH)
       }
       case ' ' => ()
       case '\r' => ()
@@ -133,7 +146,7 @@ class Scanner(val source: String) {
     while (isAlphaNumeric(peek())) advance()
 
     val text = source.substring(start, current)
-    val tokenType = keywords.getOrElse(text, TokenType.IDENTIFIER)
+    val tokenType = keywords.getOrElse(text, IDENTIFIER)
     addToken(tokenType)
   }
 
@@ -143,7 +156,7 @@ class Scanner(val source: String) {
   }
 
   def addToken(tokenType: TokenType): Unit = {
-    addToken(tokenType, null)
+    addToken(tokenType, None)
   }
 
   def addToken(tokenType: TokenType, literal: Any): Unit = {
@@ -183,7 +196,7 @@ class Scanner(val source: String) {
     advance()
 
     val value = source.substring(start + 1, current - 1)
-    addToken(TokenType.STRING, value)
+    addToken(STRING, value)
   }
 
   def number(): Unit = {
@@ -194,7 +207,7 @@ class Scanner(val source: String) {
       while (isDigit(peek())) advance()
     }
 
-    addToken(TokenType.NUMBER, source.substring(start, current).toDouble)
+    addToken(NUMBER, source.substring(start, current).toDouble)
   }
 
   def isDigit(c: Char): Boolean = {
@@ -210,92 +223,130 @@ class Scanner(val source: String) {
   def isAlphaNumeric(c: Char): Boolean = isAlpha(c) || isDigit(c)
 
   val keywords: Map[String, TokenType] = Map(
-    "and" -> TokenType.AND,
-    "class" -> TokenType.CLASS,
-    "else" -> TokenType.ELSE,
-    "false" -> TokenType.FALSE,
-    "for" -> TokenType.FOR,
-    "fun" -> TokenType.FUN,
-    "if" -> TokenType.IF,
-    "nil" -> TokenType.NIL,
-    "or" -> TokenType.OR,
-    "print" -> TokenType.PRINT,
-    "return" -> TokenType.RETURN,
-    "super" -> TokenType.SUPER,
-    "this" -> TokenType.THIS,
-    "true" -> TokenType.TRUE,
-    "var" -> TokenType.VAR,
-    "while" -> TokenType.WHILE
+    "and" -> AND,
+    "class" -> CLASS,
+    "else" -> ELSE,
+    "false" -> FALSE,
+    "for" -> FOR,
+    "fun" -> FUN,
+    "if" -> IF,
+    "nil" -> NIL,
+    "or" -> OR,
+    "print" -> PRINT,
+    "return" -> RETURN,
+    "super" -> SUPER,
+    "this" -> THIS,
+    "true" -> TRUE,
+    "var" -> VAR,
+    "while" -> WHILE
   )
 }
-
-enum TokenType {
-  case LEFT_PAREN, RIGHT_PAREN, LEFT_BRACE, RIGHT_BRACE, COMMA, DOT, MINUS, PLUS, SEMICOLON, SLASH, STAR,
-       BANG, BANG_EQUAL, EQUAL, EQUAL_EQUAL, GREATER, GREATER_EQUAL, LESS, LESS_EQUAL,
-       IDENTIFIER, STRING, NUMBER,
-       AND, CLASS, ELSE, FALSE, FUN, FOR, IF, NIL, OR, PRINT, RETURN, SUPER, THIS, TRUE, VAR, WHILE,
-       EOF
-}
-
-case class Token(tokenType: TokenType, lexeme: String, literal: Any, line: Int)
 
 sealed trait Expr
 case class Binary(left: Expr, operator: Token, right: Expr) extends Expr
 case class Grouping(expression: Expr) extends Expr
 case class Literal(value: Any) extends Expr
 case class Unary(operator: Token, right: Expr) extends Expr
+case class Variable(name: Token) extends Expr
+case class Assign(name: Token, value: Expr) extends Expr
 
 sealed trait Stmt
 case class Expression(expr: Expr) extends Stmt
 case class Print(expr: Expr) extends Stmt
+case class Var(name: Token, initializer: Option[Expr]) extends Stmt
 
 def printAst(expr: Expr): String = expr match {
   case Binary(left, op, right) => s"(${op.lexeme} ${printAst(left)} ${printAst(right)})"
   case Grouping(expr) => s"(group ${printAst(expr)})"
-  case Literal(value) => if (value == null) "nil" else value.toString
+  case Literal(value) => if (value == None) "nil" else value.toString
   case Unary(op, right) => s"(${op.lexeme} ${printAst(right)})"
+  case Variable(name) => s"name=${name}"
 }
 
 class Parser(tokens: Array[Token]) {
   var current: Int = 0
 
-  case class ParseError(message: String) extends RuntimeException(message)
-
-  def parse(): ZIO[Any, ParseError, List[Stmt]] = {
+  def parse(): UIO[List[Stmt]] = {
     try
       var stmts: List[Stmt] = List()
       while (!isAtEnd()) {
-        stmts = stmts.appended(statement())
+        val maybeDeclaration = declaration()
+        stmts = stmts ++ maybeDeclaration
       }
       ZIO.succeed(stmts)
-    catch 
-      case (error: ParseError) => ZIO.fail(error)
+    catch
+      case (error: ParseError) => {
+        println("adf")
+        throw error
+      }
+      case e: Exception => {
+        println("other error")
+        throw e
+      }
+  }
+
+  def declaration(): Option[Stmt] = {
+    try
+      if (matchToken(VAR)) Some(varDeclaration())
+      else return Some(statement())
+    catch
+      case e: ParseError => {
+        synchronize()
+        None
+      }
+  }
+
+  def varDeclaration(): Stmt = {
+    val name = consume(IDENTIFIER, "Expect identifier")
+    val initializer = Option.when(matchToken(EQUAL))(expression())
+    consume(SEMICOLON, "Expect ;")
+    Var(name, initializer)
   }
 
   def statement(): Stmt = {
-    if (peek().tokenType == TokenType.PRINT) printStmt()
+    print("statemnt")
+    if (peek().tokenType == PRINT) printStmt()
     else exprStmt()
   }
 
   def exprStmt(): Stmt = {
     val exprStmt = Expression(expression())
-    consume(TokenType.SEMICOLON, "Expected semicolon")
+    consume(SEMICOLON, "Expected semicolon")
     exprStmt
   }
 
   def printStmt(): Stmt = {
-    consume(TokenType.PRINT, "Expected print")
+    println("print stmt")
+    consume(PRINT, "Expected print")
     val expr = expression()
-    consume(TokenType.SEMICOLON, "Expected semicolon")
+    consume(SEMICOLON, "Expected semicolon")
     Print(expr)
   }
 
-  def expression(): Expr = equality()
+  def expression(): Expr = assignment()
+
+  def assignment(): Expr = {
+    val left = equality() // every valid assignment target happens to also be valid syntax as a normal expression
+    // eg. newPoint(x + 2, 0).y = 3;
+
+    if (matchToken(EQUAL)) {
+      val equals = previous()
+      val right = assignment()
+      left match
+        case Variable(name) => Assign(name, right)
+        case _ => {
+          error(equals, "Invalid assignment target")
+          left
+        }
+    } else {
+      left
+    }
+  }
 
   def equality(): Expr = {
     var expr = comparison()
 
-    while (matchToken(TokenType.BANG_EQUAL, TokenType.EQUAL_EQUAL)) {
+    while (matchToken(BANG_EQUAL, EQUAL_EQUAL)) {
       val operator = previous()
       val right = comparison()
       expr = Binary(expr, operator, right)
@@ -307,7 +358,7 @@ class Parser(tokens: Array[Token]) {
   def comparison(): Expr = {
     var expr = term()
 
-    while (matchToken(TokenType.GREATER, TokenType.GREATER_EQUAL, TokenType.LESS, TokenType.LESS_EQUAL)) {
+    while (matchToken(GREATER, GREATER_EQUAL, LESS, LESS_EQUAL)) {
       val operator = previous()
       val right = term()
       expr = Binary(expr, operator, right)
@@ -319,7 +370,7 @@ class Parser(tokens: Array[Token]) {
   def term(): Expr = {
     var expr = factor()
 
-    while (matchToken(TokenType.MINUS, TokenType.PLUS)) {
+    while (matchToken(MINUS, PLUS)) {
       val operator = previous()
       val right = factor()
       expr = Binary(expr, operator, right)
@@ -331,7 +382,7 @@ class Parser(tokens: Array[Token]) {
   def factor(): Expr = {
     var expr = unary()
 
-    while (matchToken(TokenType.SLASH, TokenType.STAR)) {
+    while (matchToken(SLASH, STAR)) {
       val operator = previous()
       val right = unary()
       expr = Binary(expr, operator, right)
@@ -341,7 +392,7 @@ class Parser(tokens: Array[Token]) {
   }
 
   def unary(): Expr = {
-    if (matchToken(TokenType.BANG, TokenType.MINUS)) {
+    if (matchToken(BANG, MINUS)) {
       val operator = previous()
       val right = unary()
       Unary(operator, right)
@@ -351,17 +402,18 @@ class Parser(tokens: Array[Token]) {
   }
 
   def primary(): Expr = {
-    if (matchToken(TokenType.FALSE)) return Literal(false)
-    if (matchToken(TokenType.TRUE)) return Literal(true)
-    if (matchToken(TokenType.NIL)) return Literal(null)
-    if (matchToken(TokenType.NUMBER, TokenType.STRING)) {
+    if (matchToken(FALSE)) return Literal(false)
+    if (matchToken(TRUE)) return Literal(true)
+    if (matchToken(NIL)) return Literal(None)
+    if (matchToken(NUMBER, STRING)) {
       return Literal(previous().literal)
     }
-    if (matchToken(TokenType.LEFT_PAREN)) {
+    if (matchToken(LEFT_PAREN)) {
       val expr = expression()
-      consume(TokenType.RIGHT_PAREN, "Expect ')' after expression.")
+      consume(RIGHT_PAREN, "Expect ')' after expression.")
       return Grouping(expr)
     }
+    if (matchToken(IDENTIFIER)) return Variable(previous())
     throw error(peek(), "Expect expression.")
   }
 
@@ -410,7 +462,7 @@ class Parser(tokens: Array[Token]) {
     previous()
   }
 
-  def isAtEnd(): Boolean = peek().tokenType == TokenType.EOF
+  def isAtEnd(): Boolean = peek().tokenType == EOF
 
   def previous(): Token = tokens(current - 1)
 
@@ -418,10 +470,10 @@ class Parser(tokens: Array[Token]) {
     advance()
 
     while (!isAtEnd()) {
-      if (previous().tokenType == TokenType.SEMICOLON) return
+      if (previous().tokenType == SEMICOLON) return
 
       peek().tokenType match {
-        case TokenType.CLASS | TokenType.FUN | TokenType.VAR | TokenType.FOR | TokenType.IF | TokenType.WHILE | TokenType.PRINT | TokenType.RETURN => return
+        case CLASS | FUN | VAR | FOR | IF | WHILE | PRINT | RETURN => return
         case _ => advance()
       }
     }
@@ -429,6 +481,7 @@ class Parser(tokens: Array[Token]) {
 }
 
 object Interpreter {  // singleton
+  private val env = Environment()
   def interpret(program: List[Stmt]): Unit = {
     try 
       for {
@@ -453,6 +506,11 @@ object Interpreter {  // singleton
         ()
       }
       case Print(expr) => println(eval(expr))
+      case Var(name, initializer) => {
+        println(name)
+        println(initializer)
+        env.define(name.lexeme, initializer.map(eval))
+      }
     }
   }
 
@@ -462,43 +520,43 @@ object Interpreter {  // singleton
         val leftVal = eval(left)
         val rightVal = eval(right)
         op.tokenType match {
-          case TokenType.MINUS => {
+          case MINUS => {
             checkNumberOperands(op, leftVal, rightVal)
             leftVal.asInstanceOf[Double] - rightVal.asInstanceOf[Double]
           }
-          case TokenType.PLUS => {
+          case PLUS => {
             (leftVal, rightVal) match {
               case (a: Double, b: Double) => a + b
               case (a: String, b: String) => a + b
               case _ => throw new RuntimeError(op, "Operands must be two numbers or two strings.")
             }
           }
-          case TokenType.SLASH => {
+          case SLASH => {
             checkNumberOperands(op, leftVal, rightVal)
             leftVal.asInstanceOf[Double] / rightVal.asInstanceOf[Double]
           }
-          case TokenType.STAR => {
+          case STAR => {
             checkNumberOperands(op, leftVal, rightVal)
             leftVal.asInstanceOf[Double] * rightVal.asInstanceOf[Double]
           }
-          case TokenType.GREATER => {
+          case GREATER => {
             checkNumberOperands(op, leftVal, rightVal)
             leftVal.asInstanceOf[Double] > rightVal.asInstanceOf[Double]
           }
-          case TokenType.GREATER_EQUAL => {
+          case GREATER_EQUAL => {
             checkNumberOperands(op, leftVal, rightVal)
             leftVal.asInstanceOf[Double] >= rightVal.asInstanceOf[Double]
           }
-          case TokenType.LESS => {
+          case LESS => {
             checkNumberOperands(op, leftVal, rightVal)
             leftVal.asInstanceOf[Double] < rightVal.asInstanceOf[Double]
           }
-          case TokenType.LESS_EQUAL => {
+          case LESS_EQUAL => {
             checkNumberOperands(op, leftVal, rightVal)
             leftVal.asInstanceOf[Double] <= rightVal.asInstanceOf[Double]
           }
-          case TokenType.BANG_EQUAL => !isEqual(leftVal, rightVal)
-          case TokenType.EQUAL_EQUAL => isEqual(leftVal, rightVal)
+          case BANG_EQUAL => !isEqual(leftVal, rightVal)
+          case EQUAL_EQUAL => isEqual(leftVal, rightVal)
           case _ => null
         }
       }
@@ -508,11 +566,13 @@ object Interpreter {  // singleton
         val rightVal = eval(right)
         checkNumberOperand(op, right)
         op.tokenType match {
-          case TokenType.MINUS => -rightVal.asInstanceOf[Double]
-          case TokenType.BANG => !isTruthy(rightVal)
+          case MINUS => -rightVal.asInstanceOf[Double]
+          case BANG => !isTruthy(rightVal)
           case _ => null // unreachable todo fix
         }
       }
+      case Variable(name) => env.get(name)
+      case Assign(name, value) => env.assign(name, eval(value))
     }
   }
 
@@ -529,6 +589,10 @@ object Interpreter {  // singleton
     if (a == null) return false
     a == b
   }
+}
+
+object Parser {
+  case class ParseError(message: String) extends RuntimeException(message)
 }
 
 case class RuntimeError(token: Token, message: String) extends RuntimeException(message)
