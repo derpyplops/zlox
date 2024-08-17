@@ -61,7 +61,14 @@ object Lox extends ZIOAppDefault {
     scanner <- ZIO.succeed(new Scanner(source))
     tokens <- scanner.scanTokens
     // _=println(tokens.toList)
-    stmts <- Parser(tokens).parse()
+    stmts <- {
+      Parser(tokens).parseExpr.map(expr => List(Print(expr))) orElse Parser(tokens).parseProgram
+    } catchAll {
+      case ParseError(message) => {
+        println(message)
+        ZIO.succeed(List.empty)
+      }
+    }
     // _ = println(stmts)
   } yield Interpreter.interpret(stmts)
 
@@ -268,23 +275,25 @@ def printAst(expr: Expr): String = expr match {
 class Parser(tokens: Array[Token]) {
   var current: Int = 0
 
-  def parse(): UIO[List[Stmt]] = {
-    try
-      var stmts: List[Stmt] = List()
-      while (!isAtEnd()) {
-        val dec = declaration()
-        stmts = stmts ++ dec.toSeq
-      }
-      ZIO.succeed(stmts)
-    catch
-      case (error: ParseError) => {
-        println("adf")
-        throw error
-      }
-      case e: Exception => {
-        println("other error")
-        throw e
-      }
+  def parseProgram: IO[ParseError, List[Stmt]] = {
+    var stmts: List[Either[ParseError, Stmt]] = List()
+    while (!isAtEnd()) {
+      val dec = declaration()
+      stmts = stmts.appended(dec)
+    }
+    val (errors, successfulStmts) = stmts.partitionMap(identity)
+    
+    if (errors.nonEmpty) {
+      // Combine error messages
+      val combinedErrorMsg = errors.map(_.message).mkString("\n")
+      ZIO.fail(ParseError(combinedErrorMsg))
+    } else {
+      ZIO.succeed(successfulStmts)
+    }
+  }
+
+  def parseExpr: IO[ParseError, Expr] = {
+    ZIO.attempt(expression()).mapError(_ => ParseError("failz"))
   }
 
   def declaration(): Either[ParseError, Stmt] = {
@@ -293,7 +302,6 @@ class Parser(tokens: Array[Token]) {
       else return Right(statement())
     catch
       case e: ParseError => {
-        println(e)
         synchronize()
         Left(e)
       }
