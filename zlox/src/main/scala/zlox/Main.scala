@@ -557,7 +557,7 @@ object Interpreter {  // singleton
           }
           case BANG_EQUAL => !isEqual(leftVal, rightVal)
           case EQUAL_EQUAL => isEqual(leftVal, rightVal)
-          case _ => null
+          case _ => throw Error("Unreachable eval error")
         }
       }
       case Grouping(expression) => eval(expression)
@@ -568,7 +568,7 @@ object Interpreter {  // singleton
         op.tokenType match {
           case MINUS => -rightVal.asInstanceOf[Double]
           case BANG => !isTruthy(rightVal)
-          case _ => null // unreachable todo fix
+          case _ => throw Error("Unreachable eval error") // unreachable todo fix
         }
       }
       case Variable(name) => env.get(name)
@@ -578,15 +578,15 @@ object Interpreter {  // singleton
 
   private def isTruthy(value: Any): Boolean = {
     value match {
-      case null => false
+      case None => false
       case false => false
       case _ => true
     }
   }
 
   private def isEqual(a: Any, b: Any): Boolean = {
-    if (a == null && b == null) return true
-    if (a == null) return false
+    if (a == None && b == None) return true
+    if (a == None) return false
     a == b
   }
 }
