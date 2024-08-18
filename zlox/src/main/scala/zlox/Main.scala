@@ -250,24 +250,26 @@ sealed trait Expr
 case class Binary(left: Expr, operator: Token, right: Expr) extends Expr
 case class Grouping(expression: Expr) extends Expr
 case class Literal(value: Any) extends Expr
+case class Logical(left: Expr, operator: Token, right: Expr) extends Expr
 case class Unary(operator: Token, right: Expr) extends Expr
 case class Variable(name: Token) extends Expr
 case class Assign(name: Token, value: Expr) extends Expr
 
 sealed trait Stmt
 case class Expression(expr: Expr) extends Stmt
+case class If(condition: Expr, thenDo: Stmt, elseDo: Option[Stmt]) extends Stmt
 case class Print(expr: Expr) extends Stmt
 case class Var(name: Token, initializer: Option[Expr]) extends Stmt
 case class Block(statements: List[Stmt]) extends Stmt
 
-def printAst(expr: Expr): String = expr match {
-  case Binary(left, op, right) => s"(${op.lexeme} ${printAst(left)} ${printAst(right)})"
-  case Grouping(expr) => s"(group ${printAst(expr)})"
-  case Literal(value) => if (value == None) "nil" else value.toString
-  case Unary(op, right) => s"(${op.lexeme} ${printAst(right)})"
-  case Variable(name) => s"(name:=${name})"
-  case Assign(name, value) => s"(assign (${name} -> ${value}))"
-}
+// def printAst(expr: Expr): String = expr match {
+//   case Binary(left, op, right) => s"(${op.lexeme} ${printAst(left)} ${printAst(right)})"
+//   case Grouping(expr) => s"(group ${printAst(expr)})"
+//   case Literal(value) => if (value == None) "nil" else value.toString
+//   case Unary(op, right) => s"(${op.lexeme} ${printAst(right)})"
+//   case Variable(name) => s"(name:=${name})"
+//   case Assign(name, value) => s"(assign (${name} -> ${value}))"
+// }
 
 class Parser(tokens: Array[Token]) {
   var current: Int = 0
@@ -313,27 +315,27 @@ class Parser(tokens: Array[Token]) {
     Var(name, initializer)
   }
 
-  def block(): List[Stmt] = {
-    var statements: Array[Stmt] = Array.empty
-    while (!check(RIGHT_BRACE) && !isAtEnd()) {
-      statements = statements :++ declaration().toSeq
-    }
-    consume(RIGHT_BRACE, "Expect }")
-    statements.toList
-  }
-
   def statement(): Stmt = {
-    if (peek().tokenType == PRINT) {
-      val stmt = printStmt()
-      return stmt
-    }
-    matchToken(LEFT_BRACE).fold(exprStmt())(_ => Block(block()))
+    if (matchToken(IF).isDefined) ifStmt()
+    else if (peek().tokenType == PRINT) printStmt()
+    else if (matchToken(LEFT_BRACE).isDefined) Block(block())
+    else exprStmt()
   }
 
   def exprStmt(): Stmt = {
     val exprStmt = Expression(expression())
     consume(SEMICOLON, "Expected semicolon")
     exprStmt
+  }
+
+  def ifStmt(): Stmt = {
+    consume(LEFT_PAREN, "Expect ( after 'if'.")
+    val condition = expression()
+    consume(RIGHT_PAREN, "Expect ')' after 'if' condition")
+
+    val thenDo = statement()
+    val elseDo = matchToken(ELSE).map(_ => statement())
+    return If(condition, thenDo, elseDo)
   }
 
   def printStmt(): Stmt = {
@@ -343,10 +345,19 @@ class Parser(tokens: Array[Token]) {
     Print(expr)
   }
 
+  def block(): List[Stmt] = {
+    var statements: Array[Stmt] = Array.empty
+    while (!check(RIGHT_BRACE) && !isAtEnd()) {
+      statements = statements :++ declaration().toSeq
+    }
+    consume(RIGHT_BRACE, "Expect }")
+    statements.toList
+  }
+
   def expression(): Expr = assignment()
 
   def assignment(): Expr = {
-    val left = equality() // every valid assignment target happens to also be valid syntax as a normal expression
+    val left = or() // every valid assignment target happens to also be valid syntax as a normal expression
     // eg. newPoint(x + 2, 0).y = 3;
 
     matchToken(EQUAL) match {
@@ -362,6 +373,30 @@ class Parser(tokens: Array[Token]) {
       }
       case _ => left
     }
+  }
+
+  def or(): Expr = {
+    var expr = and()
+
+    while (matchToken(OR).isDefined) {
+      val operator = previous()
+      val right = and()
+      expr = Logical(expr, operator, right)
+    }
+
+    return expr
+  }
+
+  def and(): Expr = {
+    var expr = equality()
+
+    while (matchToken(AND).isDefined) {
+      val operator = previous()
+      val right = equality()
+      expr = Logical(expr, operator, right)
+    }
+
+    return expr
   }
 
 
@@ -496,6 +531,10 @@ object Interpreter {  // singleton
         finally
           env = prev
       }
+      case If(condition, thenDo, elseDo) => {
+        if isTruthy(eval(condition)) then exec(thenDo)
+        else elseDo.foreach(exec)
+      }
     }
   }
 
@@ -558,6 +597,14 @@ object Interpreter {  // singleton
       }
       case Variable(name) => env.get(name)
       case Assign(name, value) => env.assign(name, eval(value))
+      case Logical(left, op, right) => {
+        val leftVal = eval(left)
+        op.tokenType match {
+          case OR => if (isTruthy(leftVal)) leftVal else eval(right)
+          case AND => if (!isTruthy(leftVal)) leftVal else eval(right)
+          case _ => throw Error("Unreachable eval error") // unreachable
+        }
+      }
     }
   }
 
