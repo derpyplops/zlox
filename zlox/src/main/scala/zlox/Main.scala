@@ -11,6 +11,8 @@ import org.zlox.zlox.Environment.Environment
 import org.zlox.zlox.Main.Parser.ParseError
 import pprint.PPrinter
 
+case object NotAssigned
+
 object Lox extends ZIOAppDefault {
 
   var hadError: Boolean = false
@@ -529,7 +531,7 @@ object Interpreter {  // singleton
       case Var(name, Some(expr)) => { // isn't there a way to simplify this
         env.define(name.lexeme, eval(expr))
       }
-      case Var(name, None) => env.define(name.lexeme, None)
+      case Var(name, None) => env.define(name.lexeme, NotAssigned)
       case Block(statements) => {
         val prev = env
         try
