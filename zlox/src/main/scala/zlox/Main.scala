@@ -58,7 +58,6 @@ object Lox extends ZIOAppDefault {
   def run(source: String): ZIO[Console, IOException, Unit] = for {
     scanner <- ZIO.succeed(new Scanner(source))
     tokens <- scanner.scanTokens
-    // _=println(tokens.toList)
     stmts <- {
       Parser(tokens).parseExpr.map(expr => List(Print(expr))) orElse Parser(tokens).parseProgram
     } catchAll {
@@ -296,8 +295,10 @@ class Parser(tokens: Array[Token]) {
 
   def declaration(): Either[ParseError, Stmt] = {
     try
-      if (matchToken(VAR)) Right(varDeclaration())
-      else return Right(statement())
+      matchToken(VAR) match {
+        case Some(_) => Right(varDeclaration())
+        case None => Right(statement())
+      }
     catch
       case e: ParseError => {
         synchronize()
@@ -307,7 +308,7 @@ class Parser(tokens: Array[Token]) {
 
   def varDeclaration(): Stmt = {
     val name = consume(IDENTIFIER, "Expect identifier")
-    val initializer = Option.when(matchToken(EQUAL))(expression())
+    val initializer = matchToken(EQUAL).map(_ => expression())
     consume(SEMICOLON, "Expect ;")
     Var(name, initializer)
   }
@@ -326,8 +327,7 @@ class Parser(tokens: Array[Token]) {
       val stmt = printStmt()
       return stmt
     }
-    if (matchToken(LEFT_BRACE)) Block(block())
-    else exprStmt()
+    matchToken(LEFT_BRACE).fold(exprStmt())(_ => Block(block()))
   }
 
   def exprStmt(): Stmt = {
@@ -349,92 +349,69 @@ class Parser(tokens: Array[Token]) {
     val left = equality() // every valid assignment target happens to also be valid syntax as a normal expression
     // eg. newPoint(x + 2, 0).y = 3;
 
-    if (matchToken(EQUAL)) {
-      val equals = previous()
-      val right = assignment()
-      left match
-        case Variable(name) => Assign(name, right)
-        case _ => {
-          error(equals, "Invalid assignment target")
-          left
+    matchToken(EQUAL) match {
+      case Some(equals) => {
+        val right = assignment()
+        left match {
+          case Variable(name) => Assign(name, right)
+          case _ => {
+            error(equals, "Invalid assignment target")
+            left
+          }
         }
-    } else {
-      left
+      }
+      case _ => left
     }
   }
 
-  def equality(): Expr = {
-    var expr = comparison()
 
-    while (matchToken(BANG_EQUAL, EQUAL_EQUAL)) {
-      val operator = previous()
-      val right = comparison()
-      expr = Binary(expr, operator, right)
+  def equality(): Expr = leftAssoc(comparison, BANG_EQUAL, EQUAL_EQUAL)
+
+  def comparison(): Expr = leftAssoc(term, GREATER, GREATER_EQUAL, LESS, LESS_EQUAL)
+
+  def leftAssoc(lower: () => Expr, tokenTypes: TokenType*): Expr = {
+    var expr = lower()
+
+    matchToken(tokenTypes*) match {
+      case Some(operator) => {
+        val right = lower()
+        Binary(expr, operator, right)
+      }
+      case None => expr
     }
-
-    expr
   }
 
-  def comparison(): Expr = {
-    var expr = term()
+  def term(): Expr = leftAssoc(factor, MINUS, PLUS)
 
-    while (matchToken(GREATER, GREATER_EQUAL, LESS, LESS_EQUAL)) {
-      val operator = previous()
-      val right = term()
-      expr = Binary(expr, operator, right)
-    }
-
-    expr
-  }
-
-  def term(): Expr = {
-    var expr = factor()
-
-    while (matchToken(MINUS, PLUS)) {
-      val operator = previous()
-      val right = factor()
-      expr = Binary(expr, operator, right)
-    }
-
-    expr
-  }
-
-  def factor(): Expr = {
-    var expr = unary()
-
-    while (matchToken(SLASH, STAR)) {
-      val operator = previous()
-      val right = unary()
-      expr = Binary(expr, operator, right)
-    }
-
-    expr
-  }
+  def factor(): Expr = leftAssoc(unary, SLASH, STAR)
 
   def unary(): Expr = {
-    if (matchToken(BANG, MINUS)) {
-      val operator = previous()
-      val right = unary()
-      Unary(operator, right)
-    } else {
-      primary()
+    matchToken(BANG, MINUS) match {
+      case Some(operator) => Unary(operator, unary())
+      case None => primary()
     }
   }
 
   def primary(): Expr = {
-    if (matchToken(FALSE)) return Literal(false)
-    if (matchToken(TRUE)) return Literal(true)
-    if (matchToken(NIL)) return Literal(None)
-    if (matchToken(NUMBER, STRING)) {
-      return Literal(previous().literal)
+    val token = matchToken(FALSE, TRUE, NIL, NUMBER, STRING, LEFT_PAREN, IDENTIFIER)
+    val ttype = token.getOrElse(throw error(peek(), "Expect expression.")).tokenType
+    ttype match {
+      case FALSE => Literal(false)
+      case TRUE => Literal(true)
+      case NIL => Literal(None)
+      case NUMBER => Literal(previous().literal)
+      case STRING => Literal(previous().literal)
+      case LEFT_PAREN => {
+        val expr = expression()
+        consume(RIGHT_PAREN, "Expect ')' after expression.")
+        Grouping(expr)
+      }
+      case IDENTIFIER => Variable(previous())
+      case o => {
+        pprint.pprintln(o)
+        throw error(peek(), "Expect expression.")
+      }
     }
-    if (matchToken(LEFT_PAREN)) {
-      val expr = expression()
-      consume(RIGHT_PAREN, "Expect ')' after expression.")
-      return Grouping(expr)
-    }
-    if (matchToken(IDENTIFIER)) return Variable(previous())
-    throw error(peek(), "Expect expression.")
   }
 
   def consume(tokenType: TokenType, message: String): Token = {
@@ -444,32 +421,11 @@ class Parser(tokens: Array[Token]) {
 
   def error(token: Token, message: String): ParseError = {
     Lox.error(token.line, message)
-    ParseError(message)
-  } 
+    ParseError(f"${message} at ${token}")
+  }
 
-  // def left_assoc(lower: () => Expr, tokenTypes: TokenType*): Expr = {
-  //   var expr = lower()
-
-  //   while (matchToken(tokenTypes*)) {
-  //     val operator = previous()
-  //     val right = lower()
-  //     expr = Binary(expr, operator, right)
-  //   }
-
-  //   expr
-  // }
-
-
-  def matchToken(types: TokenType*): Boolean = {
-    boundary:
-      for (tokenType <- types) {
-        if (check(tokenType)) {
-          advance()
-          break(true)
-        }
-      }
-
-      false
+  def matchToken(types: TokenType*): Option[Token] = {
+    types.find(check).map(_ => advance())
   }
 
   def check(tokenType: TokenType): Boolean = 
