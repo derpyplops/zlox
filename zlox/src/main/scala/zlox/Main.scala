@@ -9,19 +9,16 @@ import org.zlox.zlox.Token._
 import TokenType.*
 import org.zlox.zlox.Environment.Environment
 import org.zlox.zlox.Main.Parser.ParseError
+import pprint.PPrinter
 
 object Lox extends ZIOAppDefault {
 
   var hadError: Boolean = false
   var hadRuntimeError: Boolean = false
 
-  override def run =
-    program.provide(
-      ZLayer.succeed(ZIOAppArgs(Chunk.empty)),
-      ZLayer.succeed(Console.ConsoleLive)
-    )
+  def run = program.provideSomeLayer[ZIOAppArgs](ZLayer.succeed(Console.ConsoleLive))
 
-  val program: ZIO[Console & ZIOAppArgs, IOException, Unit] = for {
+  val program: ZIO[Console & ZIOAppArgs, IOException, ExitCode] = for {
     args <- ZIOAppArgs.getArgs
     exitCode <- args.toList match {
       case Nil => runPrompt.as(ExitCode.success)
@@ -33,8 +30,7 @@ object Lox extends ZIOAppDefault {
         }
       case _ => Console.printLine("Usage: zlox [script]").as(ExitCode.failure)
     }
-    _ <- exit(exitCode)
-  } yield ()
+  } yield exitCode
 
   def runFile(filepath: String): ZIO[Console, IOException, Unit] = for {
     source <- ZIO.attempt(Source.fromFile(filepath)).orDie
@@ -69,7 +65,7 @@ object Lox extends ZIOAppDefault {
         ZIO.succeed(List.empty)
       }
     }
-    // _ = println(stmts)
+    _ = pprint.pprintln(stmts)
   } yield Interpreter.interpret(stmts)
 
   def error(line: Int, message: String) = {
@@ -317,7 +313,7 @@ class Parser(tokens: Array[Token]) {
   def block(): List[Stmt] = {
     var statements: Array[Stmt] = Array.empty
     while (!check(RIGHT_BRACE) && !isAtEnd()) {
-      declaration()
+      statements = statements :++ declaration().toSeq
     }
     consume(RIGHT_BRACE, "Expect }")
     statements.toList

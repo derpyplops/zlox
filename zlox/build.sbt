@@ -11,7 +11,8 @@ lazy val root = project
       "dev.zio" %% "zio-test"          % zioVersion % Test,
       "dev.zio" %% "zio-test-sbt"      % zioVersion % Test,
       "dev.zio" %% "zio-test-junit"    % zioVersion % Test,
-      "dev.zio" %% "zio-test-magnolia" % zioVersion % Test
+      "dev.zio" %% "zio-test-magnolia" % zioVersion % Test,
+      "com.lihaoyi" %% "pprint" % "0.9.0"
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
