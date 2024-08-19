@@ -655,7 +655,7 @@ object Interpreter {  // singleton
           exec(body)
         }
       }
-      case func @ Function(name, _, _) => env.define(name.lexeme, new LoxFunction(func))
+      case func @ Function(name, _, _) => env.define(name.lexeme, new LoxFunction(func, env))
       case Return(keyword, value) => {
         val returnValue = value.map(eval).getOrElse(None)
         throw ReturnException(returnValue)
@@ -785,10 +785,11 @@ abstract trait LoxCallable {
   def call(args: List[Any]): Any
 }
 
-class LoxFunction(val declaration: Function) extends LoxCallable {
+class LoxFunction(val declaration: Function, val closure: Environment) extends LoxCallable {
   override def arity = declaration.params.length
+
   override def call(args: List[Any]): Any = {
-    val env = Environment.withEnclosing(Interpreter.globals)
+    val env = Environment.withEnclosing(closure)
     for {
       (param, arg) <- declaration.params.zip(args)
     } env.define(param.lexeme, arg)
@@ -801,6 +802,4 @@ class LoxFunction(val declaration: Function) extends LoxCallable {
   }
 
   override def toString: String = "<fn " + declaration.name.lexeme + ">"
-
-
 }
