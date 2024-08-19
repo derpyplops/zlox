@@ -248,6 +248,7 @@ class Scanner(val source: String) {
 
 sealed trait Expr
 case class Binary(left: Expr, operator: Token, right: Expr) extends Expr
+case class Call(callee: Expr, paren: Token, arguments: List[Expr]) extends Expr
 case class Grouping(expression: Expr) extends Expr
 case class Literal(value: Any) extends Expr
 case class Logical(left: Expr, operator: Token, right: Expr) extends Expr
@@ -468,8 +469,36 @@ class Parser(tokens: Array[Token]) {
   def unary(): Expr = {
     matchToken(BANG, MINUS) match {
       case Some(operator) => Unary(operator, unary())
-      case None => primary()
+      case None =>  call()
     }
+  }
+
+  def call(): Expr = {
+    var expr = primary()
+
+    boundary:
+      while (true)
+        if (matchToken(LEFT_PAREN).isDefined) then expr = finishCall(expr)
+        else break()
+
+    return expr
+  }
+
+  def finishCall(callee: Expr) = {
+    val arguments = if (!check(RIGHT_PAREN)) args() else List()
+
+    val paren = consume(RIGHT_PAREN, "Expect ')' after arguments.")
+    Call(callee, paren, arguments)
+  }
+
+  def args(): List[Expr] = {
+    var arguments: List[Expr] = List()
+    while
+        if arguments.length >= 255 then error(peek(), "Cannot have more than 255 arguments.")
+        arguments = arguments :+ expression()
+        matchToken(COMMA).isDefined
+      do ()
+    return arguments
   }
 
   def primary(): Expr = {
@@ -535,6 +564,8 @@ class Parser(tokens: Array[Token]) {
     }
   }
 }
+
+class Interpreter
 
 object Interpreter {  // singleton
   private var env = Environment()
@@ -655,6 +686,22 @@ object Interpreter {  // singleton
           case _ => throw Error("Unreachable eval error") // unreachable
         }
       }
+      case Call(callee, paren, arguments) => {
+        val calleeVal = eval(callee)
+        val argvals = arguments.map(eval)
+
+        if (!calleeVal.isInstanceOf[LoxCallable]) {
+          throw new RuntimeError(paren, "Can only call functions and classes.")
+        }
+
+        val func = calleeVal.asInstanceOf[LoxCallable]
+
+        if (argvals.length != func.arity) {
+          throw new RuntimeError(paren, f"Expected ${calleeVal.asInstanceOf[LoxCallable].arity} arguments but got ${argvals.length}.")
+        }
+
+        return func.call(argvals)
+      }
     }
   }
 
@@ -678,3 +725,8 @@ object Parser {
 }
 
 case class RuntimeError(token: Token, message: String) extends RuntimeException(message)
+
+trait LoxCallable {
+  def arity: Int
+  def call(args: List[Any]): Any
+}
