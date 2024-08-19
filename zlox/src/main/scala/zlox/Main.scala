@@ -266,6 +266,7 @@ case class Block(statements: List[Stmt]) extends Stmt {
   def this(stmts: Stmt*) = this(stmts.toList)
 }
 case class While(condition: Expr, body: Stmt) extends Stmt
+case class Return(keyword: Token, value: Option[Expr]) extends Stmt
 
 // def printAst(expr: Expr): String = expr match {
 //   case Binary(left, op, right) => s"(${op.lexeme} ${printAst(left)} ${printAst(right)})"
@@ -327,6 +328,7 @@ class Parser(tokens: Array[Token]) {
     if (matchToken(FOR).isDefined) forStmt()
     else if (matchToken(IF).isDefined) ifStmt()
     else if (peek().tokenType == PRINT) printStmt()
+    else if (matchToken(RETURN).isDefined) returnStmt()
     else if (matchToken(WHILE).isDefined) whileStmt()
     else if (matchToken(LEFT_BRACE).isDefined) Block(block())
     else exprStmt()
@@ -409,6 +411,13 @@ class Parser(tokens: Array[Token]) {
     val expr = expression()
     consume(SEMICOLON, "Expected semicolon")
     Print(expr)
+  }
+
+  def returnStmt(): Stmt = {
+    val keyword = previous()
+    val value = Option.when(!check(SEMICOLON))(expression())
+    consume(SEMICOLON, "Expect ';' after return value.")
+    Return(keyword, value)
   }
 
   def whileStmt(): Stmt = {
@@ -647,6 +656,10 @@ object Interpreter {  // singleton
         }
       }
       case func @ Function(name, _, _) => env.define(name.lexeme, new LoxFunction(func))
+      case Return(keyword, value) => {
+        val returnValue = value.map(eval).getOrElse(None)
+        throw ReturnException(returnValue)
+      }
     }
   }
 
@@ -765,6 +778,7 @@ object Parser {
 }
 
 case class RuntimeError(token: Token, message: String) extends RuntimeException(message)
+case class ReturnException(value: Any) extends RuntimeException(null, null, false, false)
 
 abstract trait LoxCallable {
   def arity: Int
@@ -779,7 +793,10 @@ class LoxFunction(val declaration: Function) extends LoxCallable {
       (param, arg) <- declaration.params.zip(args)
     } env.define(param.lexeme, arg)
 
-    Interpreter.execBlock(declaration.body, env)
+    try
+      Interpreter.execBlock(declaration.body, env)
+    catch
+      case ReturnException(value) => return value
     return None // todo
   }
 
