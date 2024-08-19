@@ -260,7 +260,10 @@ case class Expression(expr: Expr) extends Stmt
 case class If(condition: Expr, thenDo: Stmt, elseDo: Option[Stmt]) extends Stmt
 case class Print(expr: Expr) extends Stmt
 case class Var(name: Token, initializer: Option[Expr]) extends Stmt
-case class Block(statements: List[Stmt]) extends Stmt
+case class Block(statements: List[Stmt]) extends Stmt {
+  def this(stmts: Stmt*) = this(stmts.toList)
+}
+case class While(condition: Expr, body: Stmt) extends Stmt
 
 // def printAst(expr: Expr): String = expr match {
 //   case Binary(left, op, right) => s"(${op.lexeme} ${printAst(left)} ${printAst(right)})"
@@ -316,8 +319,10 @@ class Parser(tokens: Array[Token]) {
   }
 
   def statement(): Stmt = {
-    if (matchToken(IF).isDefined) ifStmt()
+    if (matchToken(FOR).isDefined) forStmt()
+    else if (matchToken(IF).isDefined) ifStmt()
     else if (peek().tokenType == PRINT) printStmt()
+    else if (matchToken(WHILE).isDefined) whileStmt()
     else if (matchToken(LEFT_BRACE).isDefined) Block(block())
     else exprStmt()
   }
@@ -326,6 +331,38 @@ class Parser(tokens: Array[Token]) {
     val exprStmt = Expression(expression())
     consume(SEMICOLON, "Expected semicolon")
     exprStmt
+  }
+
+  def forStmt(): Stmt = {
+    consume(LEFT_PAREN, "Expect '(' after 'for'.")
+    val initializer = matchToken(SEMICOLON, VAR).map(_.tokenType) match {
+      case Some(SEMICOLON) => None
+      case Some(VAR) => Some(varDeclaration())
+      case _ => Some(exprStmt())
+    }
+    val condition = Option.when(!check(SEMICOLON))(expression())
+    consume(SEMICOLON, "Expect ';' after loop condition")
+    val condStmt = condition.getOrElse(Literal(true))
+
+    val increment = Option.when(!check(RIGHT_PAREN))(expression())
+    consume(RIGHT_PAREN, "Expect ')' after for clauses.")
+
+    val body = statement()
+
+    // val afterInc = Block(List(body) ++ increment.map(Expression.apply).toSeq)
+    // val afterCond = While(condition.getOrElse(Literal(true)), afterInc)
+    // val afterInit = Block(initializer.toList ++ List(afterCond))
+    return Block(
+      initializer.toList ++ 
+      List(
+          While(
+              condStmt,
+              Block(
+                  List(body) ++ increment.map(Expression.apply).toList
+              )
+          )
+      )
+    )
   }
 
   def ifStmt(): Stmt = {
@@ -343,6 +380,14 @@ class Parser(tokens: Array[Token]) {
     val expr = expression()
     consume(SEMICOLON, "Expected semicolon")
     Print(expr)
+  }
+
+  def whileStmt(): Stmt = {
+    consume(LEFT_PAREN, "Expect '(' after 'while'.")
+    val condition = expression()
+    consume(RIGHT_PAREN, "Expect ') after condition.")
+    val body = statement()
+    return While(condition, body)
   }
 
   def block(): List[Stmt] = {
@@ -534,6 +579,11 @@ object Interpreter {  // singleton
       case If(condition, thenDo, elseDo) => {
         if isTruthy(eval(condition)) then exec(thenDo)
         else elseDo.foreach(exec)
+      }
+      case While(condition, body) => {
+        while (isTruthy(eval(condition))) {
+          exec(body)
+        }
       }
     }
   }
