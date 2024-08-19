@@ -568,7 +568,15 @@ class Parser(tokens: Array[Token]) {
 class Interpreter
 
 object Interpreter {  // singleton
-  private var env = Environment()
+
+  final val globals = Environment()
+  private var env = globals
+
+  globals.define("clock", new LoxCallable {
+    def arity = 0
+    def call(args: List[Any]): Any = java.time.LocalDateTime.now().toEpochSecond(java.time.ZoneOffset.UTC)
+  })
+
   def interpret(program: List[Stmt]): Unit = {
     try 
       for {
