@@ -258,6 +258,7 @@ case class Assign(name: Token, value: Expr) extends Expr
 
 sealed trait Stmt
 case class Expression(expr: Expr) extends Stmt
+case class Function(name: Token, params: List[Token], body: List[Stmt]) extends Stmt
 case class If(condition: Expr, thenDo: Stmt, elseDo: Option[Stmt]) extends Stmt
 case class Print(expr: Expr) extends Stmt
 case class Var(name: Token, initializer: Option[Expr]) extends Stmt
@@ -300,10 +301,13 @@ class Parser(tokens: Array[Token]) {
   }
 
   def declaration(): Either[ParseError, Stmt] = {
+    val ttype = matchToken(VAR, FUN).map(_.tokenType)
     try
-      matchToken(VAR) match {
-        case Some(_) => Right(varDeclaration())
+      ttype match {
+        case Some(FUN) => Right(function("function"))
+        case Some(VAR) => Right(varDeclaration())
         case None => Right(statement())
+        case Some(_) => throw ParseError("Unreachable")
       }
     catch
       case e: ParseError => {
@@ -332,6 +336,30 @@ class Parser(tokens: Array[Token]) {
     val exprStmt = Expression(expression())
     consume(SEMICOLON, "Expected semicolon")
     exprStmt
+  }
+
+  def function(kind: String): Stmt = {
+    val name = consume(IDENTIFIER, f"Expect ${kind} name.")
+    consume(LEFT_PAREN, f"Expect '(' after ${kind} name.")
+    val parameters = if (!check(RIGHT_PAREN)) params() else List()
+    consume(RIGHT_PAREN, "Expect ')' after parameters.")
+    consume(LEFT_BRACE, "Expect '{' before " + kind + " body.")
+    val body = block()
+    return Function(name, parameters, body)
+  }
+
+  def params(): List[Token] = {
+    var params: List[Token] = List()
+    boundary:
+      while (!check(RIGHT_PAREN)) {
+        if (params.length >= 255) {
+          error(peek(), "Cannot have more than 255 parameters.")
+        }
+        params = params :+ consume(IDENTIFIER, "Expect parameter name.")
+        if (!check(COMMA)) break()
+        advance()
+      }
+    params
   }
 
   def forStmt(): Stmt = {
@@ -394,7 +422,8 @@ class Parser(tokens: Array[Token]) {
   def block(): List[Stmt] = {
     var statements: Array[Stmt] = Array.empty
     while (!check(RIGHT_BRACE) && !isAtEnd()) {
-      statements = statements :++ declaration().toSeq
+      val decEither = declaration() // WARNING: THIS SILENTLY IGNORES PARSE ERRORS
+      statements = statements :++ decEither.toSeq
     }
     consume(RIGHT_BRACE, "Expect }")
     statements.toList
@@ -455,7 +484,7 @@ class Parser(tokens: Array[Token]) {
 
     matchToken(tokenTypes*) match {
       case Some(operator) => {
-        val right = lower()
+        val right = leftAssoc(lower, tokenTypes*)
         Binary(expr, operator, right)
       }
       case None => expr
@@ -607,14 +636,7 @@ object Interpreter {  // singleton
         env.define(name.lexeme, eval(expr))
       }
       case Var(name, None) => env.define(name.lexeme, NotAssigned)
-      case Block(statements) => {
-        val prev = env
-        try
-          env = Environment.withEnclosing(prev)
-          statements.foreach(exec)
-        finally
-          env = prev
-      }
+      case Block(statements) => execBlock(statements, env)
       case If(condition, thenDo, elseDo) => {
         if isTruthy(eval(condition)) then exec(thenDo)
         else elseDo.foreach(exec)
@@ -624,7 +646,17 @@ object Interpreter {  // singleton
           exec(body)
         }
       }
+      case func @ Function(name, _, _) => env.define(name.lexeme, new LoxFunction(func))
     }
+  }
+
+  def execBlock (statements: List[Stmt], next: Environment): Unit = {
+    val prev = env
+    try
+      env = next
+      statements.foreach(exec)
+    finally
+      env = prev
   }
 
   private def eval(expr: Expr): Any = {
@@ -734,7 +766,24 @@ object Parser {
 
 case class RuntimeError(token: Token, message: String) extends RuntimeException(message)
 
-trait LoxCallable {
+abstract trait LoxCallable {
   def arity: Int
   def call(args: List[Any]): Any
+}
+
+class LoxFunction(val declaration: Function) extends LoxCallable {
+  override def arity = declaration.params.length
+  override def call(args: List[Any]): Any = {
+    val env = Environment.withEnclosing(Interpreter.globals)
+    for {
+      (param, arg) <- declaration.params.zip(args)
+    } env.define(param.lexeme, arg)
+
+    Interpreter.execBlock(declaration.body, env)
+    return None // todo
+  }
+
+  override def toString: String = "<fn " + declaration.name.lexeme + ">"
+
+
 }
