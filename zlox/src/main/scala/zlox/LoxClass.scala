@@ -1,10 +1,13 @@
 package org.zlox.zlox.Main
 
 class LoxClass(val name: String, methods: Map[String, LoxFn]) extends LoxCallable {
-  def arity: Int = 0
+  def arity: Int = findMethod("init").map(_.arity).getOrElse(0)
     
   def call(arguments: List[Any]): Any = {
-    LoxInstance(this)
+    val instance = LoxInstance(this)
+    val initializer = findMethod("init")
+    initializer.map(_.bind(instance).call(arguments))
+    return instance
   }
 
   def findMethod(name: String): Option[LoxFn] = {

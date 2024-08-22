@@ -6,10 +6,15 @@ object Resolver {
   var scopes = Array[Map[String, Boolean]]()
 
   enum FnType {
-    case FUNCTION, NONE, METHOD
+    case FUNCTION, NONE, METHOD, INITIALIZER
+  }
+
+  enum ClassType {
+    case NONE, CLASS
   }
 
   var currentFunctionType: FnType = FnType.NONE
+  var currentClassType: ClassType = ClassType.NONE
 
   def resolveFunction(func: Function, functionType: FnType): Unit = {
     val enclosingFunction = functionType
@@ -27,14 +32,18 @@ object Resolver {
   def resolve(thing: Stmt | Expr): Unit = {
     thing match {
       case Class(name: Token, methods: List[Function]) => {
+        val enclosingClassType = currentClassType
+        currentClassType = ClassType.CLASS
         declare(name)
         define(name)
         beginScope()
         scopes.last("this") = true
-        methods.map {
-            resolveFunction(_, FnType.METHOD)
+        methods.map { method =>
+            val declaration = if (name.lexeme == "init") FnType.INITIALIZER else FnType.METHOD
+            resolveFunction(method, declaration)
         }
         endScope()
+        currentClassType = enclosingClassType
       }
       case Block(statements) => {
         beginScope()
@@ -74,7 +83,12 @@ object Resolver {
       }
       case Return(keyword, value) => {
         checkInvalidReturn(keyword)
-        value.foreach(resolve)
+        value.foreach { v =>
+          if (currentFunctionType == FnType.INITIALIZER) {
+            Lox.error(keyword.line, "Can't return a value from an initializer.")
+          }
+          resolve(v)
+        }
       }
       case While(condition, body) => {
         resolve(condition)
@@ -106,7 +120,10 @@ object Resolver {
         resolve(obj)
         resolve(value)
       }
-      case expr @ Expr.This(keyword) => resolveLocal(expr, keyword)
+      case expr @ Expr.This(keyword) => {
+        Lox.error(keyword.line, "Can't use this outside a class")
+        return resolveLocal(expr, keyword)
+      }
     }
   }
 

@@ -678,7 +678,7 @@ object Interpreter {  // singleton
           exec(body)
         }
       }
-      case func @ Function(name, _, _) => env.define(name.lexeme, new LoxFn(func, env))
+      case func @ Function(name, _, _) => env.define(name.lexeme, LoxFn(func, env, isInitializer = false))
       case Return(keyword, value) => {
         val returnValue = value.map(eval).getOrElse(None)
         throw ReturnException(returnValue)
@@ -688,7 +688,8 @@ object Interpreter {  // singleton
 
         val mmap: Map[String, LoxFn] = Map.from {
           methods.map { method =>
-            (method.name.lexeme, new LoxFn(method, env))
+            val isInitializer = method.name.lexeme == "init"
+            (method.name.lexeme, LoxFn(method, env, isInitializer))
           }
         }
 
@@ -850,7 +851,7 @@ abstract trait LoxCallable {
   def call(args: List[Any]): Any
 }
 
-class LoxFn(val declaration: Function, val closure: Environment) extends LoxCallable {
+class LoxFn(val declaration: Function, val closure: Environment, val isInitializer: Boolean) extends LoxCallable {
   override def arity = declaration.params.length
 
   override def call(args: List[Any]): Any = {
@@ -862,14 +863,17 @@ class LoxFn(val declaration: Function, val closure: Environment) extends LoxCall
     try
       Interpreter.execBlock(declaration.body, env)
     catch
-      case ReturnException(value) => return value
+      case ReturnException(value) => {
+        if (isInitializer) return closure.getAt(0, "this")
+        else return value 
+      }
     return None // todo
   }
 
   def bind(instance: LoxInstance): LoxFn = {
     val env = Environment.withEnclosing(closure)
     env.define("this", instance)
-    return LoxFn(declaration, env)
+    return LoxFn(declaration, env, isInitializer)
   }
 
   override def toString: String = "<fn " + declaration.name.lexeme + ">"
