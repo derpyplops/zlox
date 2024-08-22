@@ -735,7 +735,6 @@ object Interpreter {  // singleton
         }
       }
       case Variable(name) => {
-        println(s"resolving var ${name}")
         locals.get(expr).fold(globals.get(name)) { depth =>
           env.getAt(depth, name.lexeme)
         }}  
@@ -787,7 +786,6 @@ object Interpreter {  // singleton
   }
 
   def resolve(expr: Expr, depth: Int): Unit = {
-    println(s"(${expr} -> ${depth})")
     locals += (expr -> depth)
   }
 }
@@ -845,7 +843,6 @@ object Resolver {
         declare(name)
         initializer.foreach(resolve)
         define(name)
-        println(s"add ${name} to scope ${scopes.size}")
       }
       case expr @ Variable(name) => {
         if (!scopes.isEmpty && scopes.last.get(name.lexeme).contains(false)) {
@@ -856,7 +853,6 @@ object Resolver {
       case expr @ Assign(name, value) => {
         resolve(value)
         resolveLocal(expr, name)
-        println(s"add ${name} to scope ${scopes.size}")
       }
       case stmt @ Function(name, params, body) => {
         declare(name)
@@ -918,7 +914,6 @@ object Resolver {
     scopes.zipWithIndex.reverse
       .find { case (scope, _) => scope.contains(name.lexeme) }
       .foreach { case (_, index) =>
-        println(s"resolving ${name} at ${scopes.size - 1 - index}")
         Interpreter.resolve(expr, scopes.size - 1 - index)
       }
   }
