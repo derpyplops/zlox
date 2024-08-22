@@ -21,7 +21,7 @@ class LoxInstance(cls: LoxClass) {
 
   def get(name: Token): Any = {
     fields.get(name.lexeme)
-    .orElse(cls.findMethod(name.lexeme))
+    .orElse(cls.findMethod(name.lexeme).map(_.bind(this)))
     .getOrElse(throw RuntimeError(name, "Undefined property '" + name.lexeme + "'."))
   }
 

@@ -558,7 +558,7 @@ class Parser(tokens: Array[Token]) {
   }
 
   def primary(): Expr = {
-    val token = matchToken(FALSE, TRUE, NIL, NUMBER, STRING, LEFT_PAREN, IDENTIFIER)
+    val token = matchToken(FALSE, TRUE, NIL, NUMBER, STRING, LEFT_PAREN, IDENTIFIER, THIS)
     val ttype = token.getOrElse(throw error(peek(), "Expect expression.")).tokenType
     ttype match {
       case FALSE => Expr.Literal(false)
@@ -572,6 +572,7 @@ class Parser(tokens: Array[Token]) {
         Expr.Grouping(expr)
       }
       case IDENTIFIER => Expr.Variable(previous())
+      case THIS => Expr.This(previous())
       case o => {
         pprint.pprintln(o)
         throw error(peek(), "Expect expression.")
@@ -762,10 +763,7 @@ object Interpreter {  // singleton
           case _ => throw Error("Unreachable eval error") // unreachable todo fix
         }
       }
-      case Expr.Variable(name) => {
-        locals.get(expr).fold(globals.get(name)) { depth =>
-          env.getAt(depth, name.lexeme)
-        }}  
+      case Expr.Variable(name) => lookupVariable(name, expr)
       case assignExpr @ Expr.Assign(name, valueExpr) => {
         val value = eval(valueExpr)        
         locals.get(assignExpr).fold(globals.assign(name, value)) { depth =>
@@ -813,8 +811,13 @@ object Interpreter {  // singleton
           return value
         }
       }
+      case Expr.This(keyword) => lookupVariable(keyword, expr)
     }
   }
+
+  def lookupVariable(name: Token, expr: Expr) = 
+    locals.get(expr)
+    .fold { globals.get(name) } { depth => env.getAt(depth, name.lexeme) }
 
   private def isTruthy(value: Any): Boolean = {
     value match {
@@ -861,6 +864,12 @@ class LoxFn(val declaration: Function, val closure: Environment) extends LoxCall
     catch
       case ReturnException(value) => return value
     return None // todo
+  }
+
+  def bind(instance: LoxInstance): LoxFn = {
+    val env = Environment.withEnclosing(closure)
+    env.define("this", instance)
+    return LoxFn(declaration, env)
   }
 
   override def toString: String = "<fn " + declaration.name.lexeme + ">"

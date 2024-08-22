@@ -29,9 +29,12 @@ object Resolver {
       case Class(name: Token, methods: List[Function]) => {
         declare(name)
         define(name)
+        beginScope()
+        scopes.last("this") = true
         methods.map {
             resolveFunction(_, FnType.METHOD)
         }
+        endScope()
       }
       case Block(statements) => {
         beginScope()
@@ -103,6 +106,7 @@ object Resolver {
         resolve(obj)
         resolve(value)
       }
+      case expr @ Expr.This(keyword) => resolveLocal(expr, keyword)
     }
   }
 
