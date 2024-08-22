@@ -31,6 +31,20 @@ class Environment(private final val vals: Map[String, Any] = Map(), final val en
         }
         else vals(name.lexeme) = value
     }
+
+    def getAt(distance: Int, name: String): Any = {
+        ancestor(distance).vals(name)
+    }
+
+    def assignAt(distance: Int, name: Token, value: Any): Unit = {
+        ancestor(distance).vals(name.lexeme) = value
+    }
+
+    def ancestor(distance: Int): Environment = {
+        if (distance == 0) this
+        else enclosing.map(_.ancestor(distance - 1))
+           .getOrElse(throw new IllegalArgumentException("Ancestor not found"))
+    }
 }
 
 object Environment {

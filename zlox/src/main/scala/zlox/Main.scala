@@ -66,8 +66,11 @@ object Lox extends ZIOAppDefault {
         ZIO.succeed(List.empty)
       }
     }
-    _ = pprint.pprintln(stmts)
-  } yield Interpreter.interpret(stmts)
+    _ <- (ZIO.attempt(stmts.map(Resolver.resolve)) 
+    *> ZIO.attempt(Interpreter.interpret(stmts))).catchAll {
+      case e => Console.printError(f"Resolver error: ${e}")
+    }
+  } yield ()
 
   def error(line: Int, message: String) = {
     report(line, "", message)
@@ -609,6 +612,7 @@ object Interpreter {  // singleton
 
   final val globals = Environment()
   private var env = globals
+  private var locals = collection.mutable.Map[Expr, Int]()
 
   globals.define("clock", new LoxCallable {
     def arity = 0
@@ -619,12 +623,13 @@ object Interpreter {  // singleton
     try 
       for {
         stmt <- program
-      } exec(stmt)
+      } exec(stmt) 
     catch
       case (error: RuntimeError) => {
         println(error)
       }
   }
+
   private def checkNumberOperand(operator: Token, operand: Any): Unit =
     if (!operand.isInstanceOf[Double]) throw new RuntimeError(operator, "Operand must be a number.")
 
@@ -729,8 +734,17 @@ object Interpreter {  // singleton
           case _ => throw Error("Unreachable eval error") // unreachable todo fix
         }
       }
-      case Variable(name) => env.get(name)
-      case Assign(name, value) => env.assign(name, eval(value))
+      case Variable(name) => {
+        println(s"resolving var ${name}")
+        locals.get(expr).fold(globals.get(name)) { depth =>
+          env.getAt(depth, name.lexeme)
+        }}  
+      case assignExpr @ Assign(name, valueExpr) => {
+        val value = eval(valueExpr)        
+        locals.get(assignExpr).fold(globals.assign(name, value)) { depth =>
+          env.assignAt(depth, name, value)
+        }
+      }
       case Logical(left, op, right) => {
         val leftVal = eval(left)
         op.tokenType match {
@@ -771,6 +785,11 @@ object Interpreter {  // singleton
     if (a == None) return false
     a == b
   }
+
+  def resolve(expr: Expr, depth: Int): Unit = {
+    println(s"(${expr} -> ${depth})")
+    locals += (expr -> depth)
+  }
 }
 
 object Parser {
@@ -802,4 +821,140 @@ class LoxFunction(val declaration: Function, val closure: Environment) extends L
   }
 
   override def toString: String = "<fn " + declaration.name.lexeme + ">"
+}
+
+object Resolver {
+  import collection.mutable.Map
+
+  var scopes = Array[Map[String, Boolean]]()
+
+  enum FnType {
+    case FUNCTION, NONE
+  }
+
+  var currentFunctionType: FnType = FnType.NONE
+
+  def resolve(thing: Stmt | Expr): Unit = {
+    thing match {
+      case Block(statements) => {
+        beginScope()
+        statements.foreach(resolve)
+        endScope()
+      }
+      case Var(name, initializer) => {
+        declare(name)
+        initializer.foreach(resolve)
+        define(name)
+        println(s"add ${name} to scope ${scopes.size}")
+      }
+      case expr @ Variable(name) => {
+        if (!scopes.isEmpty && scopes.last.get(name.lexeme).contains(false)) {
+          Lox.error(name.line, "Cannot read local variable in its own initializer.")
+        }
+        resolveLocal(expr, name)
+      }
+      case expr @ Assign(name, value) => {
+        resolve(value)
+        resolveLocal(expr, name)
+        println(s"add ${name} to scope ${scopes.size}")
+      }
+      case stmt @ Function(name, params, body) => {
+        declare(name)
+        define(name)
+        val enclosingFunction = currentFunctionType
+        currentFunctionType = FnType.FUNCTION
+        beginScope()
+        params.foreach { param => 
+          declare(param)
+          define(param)
+        }
+        body.foreach(resolve)
+        endScope()
+        currentFunctionType = enclosingFunction
+      }
+      case Expression(expr) => {
+        resolve(expr)
+      }
+      case If(condition, thenDo, elseDo) => {
+        resolve(condition)
+        resolve(thenDo)
+        elseDo.foreach(resolve)
+      }
+      case Print(expr) => {
+        resolve(expr)
+      }
+      case Return(keyword, value) => {
+        checkInvalidReturn(keyword)
+        value.foreach(resolve)
+      }
+      case While(condition, body) => {
+        resolve(condition)
+        resolve(body)
+      }
+      case Binary(left, operator, right) => {
+        resolve(left)
+        resolve(right)
+      }
+      case Call(callee, paren, arguments) => {
+        resolve(callee)
+        arguments.foreach(resolve)
+      }
+      case Grouping(expression) => {
+        resolve(expression)
+      }
+      case Literal(value) => ()
+      case Logical(left, operator, right) => {
+        resolve(left)
+        resolve(right)
+      }
+      case Unary(operator, right) => {
+        resolve(right)
+      }
+      case null => throw new Error("Unreachable")
+    }
+  }
+
+  private def resolveLocal(expr: Expr, name: Token): Unit = {
+    scopes.zipWithIndex.reverse
+      .find { case (scope, _) => scope.contains(name.lexeme) }
+      .foreach { case (_, index) =>
+        println(s"resolving ${name} at ${scopes.size - 1 - index}")
+        Interpreter.resolve(expr, scopes.size - 1 - index)
+      }
+  }
+
+  private def checkExistingVar(name: Token) = {
+    val scope = scopes.lastOption
+    if (scope.map(_.contains(name.lexeme)).getOrElse(false)) {
+      Lox.error(name.line, "Variable with this name already declared in this scope.")
+    }
+
+    // if (scope.contains(name.lexeme)) {
+    //   Lox.error(name.line, "Variable with this name already declared in this scope.")
+    // }
+  }
+
+  private def checkInvalidReturn(name: Token) = {
+    if (scopes.isEmpty) {
+      Lox.error(name.line, "Cannot return from top-level code.")
+    }
+  }
+
+  private def declare(name: Token) = 
+    if scopes.nonEmpty then scopes.last += (name.lexeme -> false)
+  
+
+  private def define(name: Token) = 
+    if scopes.nonEmpty then scopes.last += (name.lexeme -> true)
+  
+
+  private def beginScope() = {
+    scopes = scopes.appended(Map())
+  }
+
+  private def endScope() = {
+    scopes = scopes.dropRight(1)
+  }
+
+
 }
