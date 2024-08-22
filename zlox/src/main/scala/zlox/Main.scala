@@ -9,8 +9,6 @@ import TokenType.*
 import org.zlox.zlox.Main.Parser.ParseError
 import pprint.PPrinter
 
-import org.zlox.zlox.LoxClass.*
-
 case object NotAssigned
 
 object Lox extends ZIOAppDefault {
@@ -465,6 +463,7 @@ class Parser(tokens: Array[Token]) {
         val right = assignment()
         left match {
           case Expr.Variable(name) => Expr.Assign(name, right)
+          case Expr.Get(obj, name) => Expr.Set(obj, name, right)
           case _ => {
             error(equals, "Invalid assignment target")
             left
@@ -533,6 +532,9 @@ class Parser(tokens: Array[Token]) {
     boundary:
       while (true)
         if (matchToken(LEFT_PAREN).isDefined) then expr = finishCall(expr)
+        else if (matchToken(DOT).isDefined) then
+          val name = consume(IDENTIFIER, "Expect property name after '.'.")
+          expr = Expr.Get(expr, name)
         else break()
 
     return expr
@@ -787,6 +789,23 @@ object Interpreter {  // singleton
 
         return func.call(argvals)
       }
+      case Expr.Get(expr, name) => {
+        val obj = eval(expr)
+        if (obj.isInstanceOf[LoxInstance]) {
+          return obj.asInstanceOf[LoxInstance].get(name)
+        } else {
+          throw RuntimeError(name, "Only instances have properties.")
+        }
+      }
+      case Expr.Set(obj, name, value) => {
+        val objVal = eval(obj)
+        if (!objVal.isInstanceOf[LoxInstance]) {
+          throw RuntimeError(name, "Only instances have fields.")
+        } else {
+          objVal.asInstanceOf[LoxInstance].set(name, eval(value))
+          return value
+        }
+      }
     }
   }
 
@@ -929,7 +948,13 @@ object Resolver {
       case Expr.Unary(operator, right) => {
         resolve(right)
       }
-      case null => throw new Error("Unreachable")
+      case Expr.Get(expr, name) => {
+        resolve(expr)
+      }
+      case Expr.Set(obj, name, value) => {
+        resolve(obj)
+        resolve(value)
+      }
     }
   }
 
