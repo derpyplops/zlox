@@ -1,4 +1,4 @@
-package org.zlox.zlox.Token
+package org.zlox.zlox.Main
 
 enum TokenType {
   case LEFT_PAREN, RIGHT_PAREN, LEFT_BRACE, RIGHT_BRACE, COMMA, DOT, MINUS, PLUS, SEMICOLON, SLASH, STAR,

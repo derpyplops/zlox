@@ -5,11 +5,11 @@ import zio.UIO
 import scala.io.Source
 import java.io.IOException
 import scala.util.boundary, boundary.break
-import org.zlox.zlox.Token._
 import TokenType.*
-import org.zlox.zlox.Environment.Environment
 import org.zlox.zlox.Main.Parser.ParseError
 import pprint.PPrinter
+
+import org.zlox.zlox.LoxClass.*
 
 case object NotAssigned
 
@@ -249,16 +249,6 @@ class Scanner(val source: String) {
   )
 }
 
-sealed trait Expr
-case class Binary(left: Expr, operator: Token, right: Expr) extends Expr
-case class Call(callee: Expr, paren: Token, arguments: List[Expr]) extends Expr
-case class Grouping(expression: Expr) extends Expr
-case class Literal(value: Any) extends Expr
-case class Logical(left: Expr, operator: Token, right: Expr) extends Expr
-case class Unary(operator: Token, right: Expr) extends Expr
-case class Variable(name: Token) extends Expr
-case class Assign(name: Token, value: Expr) extends Expr
-
 sealed trait Stmt
 case class Expression(expr: Expr) extends Stmt
 case class Function(name: Token, params: List[Token], body: List[Stmt]) extends Stmt
@@ -270,6 +260,7 @@ case class Block(statements: List[Stmt]) extends Stmt {
 }
 case class While(condition: Expr, body: Stmt) extends Stmt
 case class Return(keyword: Token, value: Option[Expr]) extends Stmt
+case class Class(name: Token, methods: List[Function]) extends Stmt
 
 // def printAst(expr: Expr): String = expr match {
 //   case Binary(left, op, right) => s"(${op.lexeme} ${printAst(left)} ${printAst(right)})"
@@ -305,9 +296,10 @@ class Parser(tokens: Array[Token]) {
   }
 
   def declaration(): Either[ParseError, Stmt] = {
-    val ttype = matchToken(VAR, FUN).map(_.tokenType)
+    val ttype = matchToken(VAR, FUN, CLASS).map(_.tokenType)
     try
       ttype match {
+        case Some(CLASS) => Right(classDeclaration())
         case Some(FUN) => Right(function("function"))
         case Some(VAR) => Right(varDeclaration())
         case None => Right(statement())
@@ -319,6 +311,27 @@ class Parser(tokens: Array[Token]) {
         Left(e)
       }
   }
+
+  def classDeclaration(): Stmt = {
+    val name = consume(IDENTIFIER, "Expect class name.")
+    consume(LEFT_BRACE, "Expect it")
+
+    val methods: List[Function] = {
+      @annotation.tailrec
+      def loop(acc: List[Function]): List[Function] = {
+        if (isAtEnd() || check(RIGHT_BRACE)) acc.reverse
+        else loop(function("method") :: acc)
+      }
+      
+      loop(List())
+    }
+
+    consume(RIGHT_BRACE)
+
+    Class(name, methods)
+  }
+
+
 
   def varDeclaration(): Stmt = {
     val name = consume(IDENTIFIER, "Expect identifier")
@@ -343,7 +356,7 @@ class Parser(tokens: Array[Token]) {
     exprStmt
   }
 
-  def function(kind: String): Stmt = {
+  def function(kind: String): Function = {
     val name = consume(IDENTIFIER, f"Expect ${kind} name.")
     consume(LEFT_PAREN, f"Expect '(' after ${kind} name.")
     val parameters = if (!check(RIGHT_PAREN)) params() else List()
@@ -376,7 +389,7 @@ class Parser(tokens: Array[Token]) {
     }
     val condition = Option.when(!check(SEMICOLON))(expression())
     consume(SEMICOLON, "Expect ';' after loop condition")
-    val condStmt = condition.getOrElse(Literal(true))
+    val condStmt = condition.getOrElse(Expr.Literal(true))
 
     val increment = Option.when(!check(RIGHT_PAREN))(expression())
     consume(RIGHT_PAREN, "Expect ')' after for clauses.")
@@ -451,7 +464,7 @@ class Parser(tokens: Array[Token]) {
       case Some(equals) => {
         val right = assignment()
         left match {
-          case Variable(name) => Assign(name, right)
+          case Expr.Variable(name) => Expr.Assign(name, right)
           case _ => {
             error(equals, "Invalid assignment target")
             left
@@ -468,7 +481,7 @@ class Parser(tokens: Array[Token]) {
     while (matchToken(OR).isDefined) {
       val operator = previous()
       val right = and()
-      expr = Logical(expr, operator, right)
+      expr = Expr.Logical(expr, operator, right)
     }
 
     return expr
@@ -480,7 +493,7 @@ class Parser(tokens: Array[Token]) {
     while (matchToken(AND).isDefined) {
       val operator = previous()
       val right = equality()
-      expr = Logical(expr, operator, right)
+      expr = Expr.Logical(expr, operator, right)
     }
 
     return expr
@@ -497,7 +510,7 @@ class Parser(tokens: Array[Token]) {
     matchToken(tokenTypes*) match {
       case Some(operator) => {
         val right = leftAssoc(lower, tokenTypes*)
-        Binary(expr, operator, right)
+        Expr.Binary(expr, operator, right)
       }
       case None => expr
     }
@@ -509,7 +522,7 @@ class Parser(tokens: Array[Token]) {
 
   def unary(): Expr = {
     matchToken(BANG, MINUS) match {
-      case Some(operator) => Unary(operator, unary())
+      case Some(operator) => Expr.Unary(operator, unary())
       case None =>  call()
     }
   }
@@ -529,7 +542,7 @@ class Parser(tokens: Array[Token]) {
     val arguments = if (!check(RIGHT_PAREN)) args() else List()
 
     val paren = consume(RIGHT_PAREN, "Expect ')' after arguments.")
-    Call(callee, paren, arguments)
+    Expr.Call(callee, paren, arguments)
   }
 
   def args(): List[Expr] = {
@@ -546,23 +559,25 @@ class Parser(tokens: Array[Token]) {
     val token = matchToken(FALSE, TRUE, NIL, NUMBER, STRING, LEFT_PAREN, IDENTIFIER)
     val ttype = token.getOrElse(throw error(peek(), "Expect expression.")).tokenType
     ttype match {
-      case FALSE => Literal(false)
-      case TRUE => Literal(true)
-      case NIL => Literal(None)
-      case NUMBER => Literal(previous().literal)
-      case STRING => Literal(previous().literal)
+      case FALSE => Expr.Literal(false)
+      case TRUE => Expr.Literal(true)
+      case NIL => Expr.Literal(None)
+      case NUMBER => Expr.Literal(previous().literal)
+      case STRING => Expr.Literal(previous().literal)
       case LEFT_PAREN => {
         val expr = expression()
         consume(RIGHT_PAREN, "Expect ')' after expression.")
-        Grouping(expr)
+        Expr.Grouping(expr)
       }
-      case IDENTIFIER => Variable(previous())
+      case IDENTIFIER => Expr.Variable(previous())
       case o => {
         pprint.pprintln(o)
         throw error(peek(), "Expect expression.")
       }
     }
   }
+
+  def consume(tokenType: TokenType): Token = consume(tokenType, s"Expected ${tokenType}")
 
   def consume(tokenType: TokenType, message: String): Token = {
     if (check(tokenType)) return advance()
@@ -665,6 +680,10 @@ object Interpreter {  // singleton
         val returnValue = value.map(eval).getOrElse(None)
         throw ReturnException(returnValue)
       }
+      case Class(name, methods) => {
+        env.define(name.lexeme, NotAssigned)
+        env.assign(name, LoxClass(name.lexeme))
+      }
     }
   }
 
@@ -679,7 +698,7 @@ object Interpreter {  // singleton
 
   private def eval(expr: Expr): Any = {
     expr match {
-      case Binary(left, op, right) => {
+      case Expr.Binary(left, op, right) => {
         val leftVal = eval(left)
         val rightVal = eval(right)
         op.tokenType match {
@@ -723,9 +742,9 @@ object Interpreter {  // singleton
           case _ => throw Error("Unreachable eval error")
         }
       }
-      case Grouping(expression) => eval(expression)
-      case Literal(value) => value
-      case Unary(op, right) => {
+      case Expr.Grouping(expression) => eval(expression)
+      case Expr.Literal(value) => value
+      case Expr.Unary(op, right) => {
         val rightVal = eval(right)
         checkNumberOperand(op, right)
         op.tokenType match {
@@ -734,17 +753,17 @@ object Interpreter {  // singleton
           case _ => throw Error("Unreachable eval error") // unreachable todo fix
         }
       }
-      case Variable(name) => {
+      case Expr.Variable(name) => {
         locals.get(expr).fold(globals.get(name)) { depth =>
           env.getAt(depth, name.lexeme)
         }}  
-      case assignExpr @ Assign(name, valueExpr) => {
+      case assignExpr @ Expr.Assign(name, valueExpr) => {
         val value = eval(valueExpr)        
         locals.get(assignExpr).fold(globals.assign(name, value)) { depth =>
           env.assignAt(depth, name, value)
         }
       }
-      case Logical(left, op, right) => {
+      case Expr.Logical(left, op, right) => {
         val leftVal = eval(left)
         op.tokenType match {
           case OR => if (isTruthy(leftVal)) leftVal else eval(right)
@@ -752,7 +771,7 @@ object Interpreter {  // singleton
           case _ => throw Error("Unreachable eval error") // unreachable
         }
       }
-      case Call(callee, paren, arguments) => {
+      case Expr.Call(callee, paren, arguments) => {
         val calleeVal = eval(callee)
         val argvals = arguments.map(eval)
 
@@ -834,6 +853,10 @@ object Resolver {
 
   def resolve(thing: Stmt | Expr): Unit = {
     thing match {
+      case Class(name: Token, methods: List[Function]) => {
+        declare(name)
+        define(name)
+      }
       case Block(statements) => {
         beginScope()
         statements.foreach(resolve)
@@ -844,13 +867,13 @@ object Resolver {
         initializer.foreach(resolve)
         define(name)
       }
-      case expr @ Variable(name) => {
+      case expr @ Expr.Variable(name) => {
         if (!scopes.isEmpty && scopes.last.get(name.lexeme).contains(false)) {
           Lox.error(name.line, "Cannot read local variable in its own initializer.")
         }
         resolveLocal(expr, name)
       }
-      case expr @ Assign(name, value) => {
+      case expr @ Expr.Assign(name, value) => {
         resolve(value)
         resolveLocal(expr, name)
       }
@@ -887,23 +910,23 @@ object Resolver {
         resolve(condition)
         resolve(body)
       }
-      case Binary(left, operator, right) => {
+      case Expr.Binary(left, operator, right) => {
         resolve(left)
         resolve(right)
       }
-      case Call(callee, paren, arguments) => {
+      case Expr.Call(callee, paren, arguments) => {
         resolve(callee)
         arguments.foreach(resolve)
       }
-      case Grouping(expression) => {
+      case Expr.Grouping(expression) => {
         resolve(expression)
       }
-      case Literal(value) => ()
-      case Logical(left, operator, right) => {
+      case Expr.Literal(value) => ()
+      case Expr.Logical(left, operator, right) => {
         resolve(left)
         resolve(right)
       }
-      case Unary(operator, right) => {
+      case Expr.Unary(operator, right) => {
         resolve(right)
       }
       case null => throw new Error("Unreachable")

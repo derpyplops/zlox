@@ -1,9 +1,8 @@
-package org.zlox.zlox.Environment
+package org.zlox.zlox.Main
 
 import zio._
 import scala.collection.mutable._
 import org.zlox.zlox.Main.RuntimeError
-import org.zlox.zlox.Token.Token
 import org.zlox.zlox.Main.NotAssigned
 
 class Environment(private final val vals: Map[String, Any] = Map(), final val enclosing: Option[Environment] = None) {
