@@ -13,5 +13,6 @@ object Expr {
   case class Assign(name: Token, value: Expr) extends Expr
   case class Get(obj: Expr, name: Token) extends Expr
   case class Set(obj: Expr, name: Token, value: Expr) extends Expr
+  case class Super(keyword: Token, method: Token) extends Expr
   case class This(keyword: Token) extends Expr
 }

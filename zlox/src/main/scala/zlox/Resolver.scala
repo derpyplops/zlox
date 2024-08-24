@@ -1,5 +1,7 @@
 package org.zlox.zlox.Main
 
+import org.zlox.zlox.Main.Resolver.ClassType.CLASS
+
 object Resolver {
   import collection.mutable.Map
 
@@ -10,7 +12,7 @@ object Resolver {
   }
 
   enum ClassType {
-    case NONE, CLASS
+    case NONE, CLASS, SUBCLASS
   }
 
   var currentFunctionType: FnType = FnType.NONE
@@ -31,18 +33,32 @@ object Resolver {
 
   def resolve(thing: Stmt | Expr): Unit = {
     thing match {
-      case Class(name: Token, methods: List[Function]) => {
+      case Class(name, superclass, methods) => {
         val enclosingClassType = currentClassType
         currentClassType = ClassType.CLASS
         declare(name)
         define(name)
+
+        superclass.foreach { sup =>
+          if (name.lexeme.equals(sup.name.lexeme)) {
+            Lox.error(name.line, "A class can't inherit from itself")
+          }
+          currentClassType = ClassType.SUBCLASS
+          resolve(sup)
+        }
+
+        if superclass.isDefined then {
+          beginScope()
+          scopes.last("super") = true
+        }
         beginScope()
         scopes.last("this") = true
-        methods.map { method =>
+        methods.foreach { method =>
             val declaration = if (name.lexeme == "init") FnType.INITIALIZER else FnType.METHOD
             resolveFunction(method, declaration)
         }
         endScope()
+        if superclass.isDefined then endScope()
         currentClassType = enclosingClassType
       }
       case Block(statements) => {
@@ -120,16 +136,21 @@ object Resolver {
         resolve(obj)
         resolve(value)
       }
-      case expr @ Expr.This(keyword) => {
+      case expr @ Expr.This(keyword) =>
         Lox.error(keyword.line, "Can't use this outside a class")
-        return resolveLocal(expr, keyword)
+        resolveLocal(expr, keyword)
+      case expr @ Expr.Super(keyword, method) => {
+        if (currentClassType != ClassType.CLASS) {
+          Lox.error(keyword.line, "Invalid place for super")
+        }
+        resolveLocal(expr, keyword)
       }
     }
   }
 
   private def resolveLocal(expr: Expr, name: Token): Unit = {
-    scopes.zipWithIndex.reverse
-      .find { case (scope, _) => scope.contains(name.lexeme) }
+    scopes.zipWithIndex
+      .findLast { case (scope, _) => scope.contains(name.lexeme) }
       .foreach { case (_, index) =>
         Interpreter.resolve(expr, scopes.size - 1 - index)
       }
@@ -137,7 +158,7 @@ object Resolver {
 
   private def checkExistingVar(name: Token) = {
     val scope = scopes.lastOption
-    if (scope.map(_.contains(name.lexeme)).getOrElse(false)) {
+    if (scope.exists(_.contains(name.lexeme))) {
       Lox.error(name.line, "Variable with this name already declared in this scope.")
     }
 

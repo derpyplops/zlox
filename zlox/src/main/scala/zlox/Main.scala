@@ -74,7 +74,7 @@ object Lox extends ZIOAppDefault {
     report(line, "", message)
   }
 
-  def report(line: Int, where: String, message: String) = {
+  def report(line: Int, where: String, message: String): IO[IOException, Unit] = {
     hadError = true
     Console.printLine(s"[line $line] Error$where: $message")
   }
@@ -258,7 +258,7 @@ case class Block(statements: List[Stmt]) extends Stmt {
 }
 case class While(condition: Expr, body: Stmt) extends Stmt
 case class Return(keyword: Token, value: Option[Expr]) extends Stmt
-case class Class(name: Token, methods: List[Function]) extends Stmt
+case class Class(name: Token, superclass: Option[Expr.Variable], methods: List[Function]) extends Stmt
 
 // def printAst(expr: Expr): String = expr match {
 //   case Binary(left, op, right) => s"(${op.lexeme} ${printAst(left)} ${printAst(right)})"
@@ -312,6 +312,13 @@ class Parser(tokens: Array[Token]) {
 
   def classDeclaration(): Stmt = {
     val name = consume(IDENTIFIER, "Expect class name.")
+
+//    val superclass = matchToken(LESS).map(Expr.Variable.apply)
+
+    val superclass = matchToken(LESS).map { _ =>
+      Expr.Variable(consume(IDENTIFIER))
+    }
+
     consume(LEFT_BRACE, "Expect it")
 
     val methods: List[Function] = {
@@ -326,7 +333,7 @@ class Parser(tokens: Array[Token]) {
 
     consume(RIGHT_BRACE)
 
-    Class(name, methods)
+    Class(name, superclass, methods)
   }
 
 
@@ -335,6 +342,7 @@ class Parser(tokens: Array[Token]) {
     val name = consume(IDENTIFIER, "Expect identifier")
     val initializer = matchToken(EQUAL).map(_ => expression())
     consume(SEMICOLON, "Expect ;")
+
     Var(name, initializer)
   }
 
@@ -397,7 +405,7 @@ class Parser(tokens: Array[Token]) {
     // val afterInc = Block(List(body) ++ increment.map(Expression.apply).toSeq)
     // val afterCond = While(condition.getOrElse(Literal(true)), afterInc)
     // val afterInit = Block(initializer.toList ++ List(afterCond))
-    return Block(
+    Block(
       initializer.toList ++ 
       List(
           While(
@@ -417,7 +425,7 @@ class Parser(tokens: Array[Token]) {
 
     val thenDo = statement()
     val elseDo = matchToken(ELSE).map(_ => statement())
-    return If(condition, thenDo, elseDo)
+    If(condition, thenDo, elseDo)
   }
 
   def printStmt(): Stmt = {
@@ -558,21 +566,27 @@ class Parser(tokens: Array[Token]) {
   }
 
   def primary(): Expr = {
-    val token = matchToken(FALSE, TRUE, NIL, NUMBER, STRING, LEFT_PAREN, IDENTIFIER, THIS)
-    val ttype = token.getOrElse(throw error(peek(), "Expect expression.")).tokenType
+    val token = matchToken(FALSE, TRUE, NIL, NUMBER, STRING, LEFT_PAREN, IDENTIFIER, THIS, SUPER)
+      .getOrElse(throw error(peek(), "Expect expression."))
+    val ttype = token.tokenType
     ttype match {
       case FALSE => Expr.Literal(false)
       case TRUE => Expr.Literal(true)
       case NIL => Expr.Literal(None)
-      case NUMBER => Expr.Literal(previous().literal)
-      case STRING => Expr.Literal(previous().literal)
+      case NUMBER => Expr.Literal(token.literal)
+      case STRING => Expr.Literal(token.literal)
       case LEFT_PAREN => {
         val expr = expression()
         consume(RIGHT_PAREN, "Expect ')' after expression.")
         Expr.Grouping(expr)
       }
-      case IDENTIFIER => Expr.Variable(previous())
-      case THIS => Expr.This(previous())
+      case IDENTIFIER => Expr.Variable(token)
+      case THIS => Expr.This(token)
+      case SUPER => {
+        consume(DOT)
+        val method = consume(IDENTIFIER)
+        Expr.Super(token, method)
+      }
       case o => {
         pprint.pprintln(o)
         throw error(peek(), "Expect expression.")
@@ -683,8 +697,22 @@ object Interpreter {  // singleton
         val returnValue = value.map(eval).getOrElse(None)
         throw ReturnException(returnValue)
       }
-      case Class(name, methods) => {
+      case Class(name, superclass, methods) => {
+
+        val superVal = superclass.map(eval)
+
+        superVal.foreach { v =>
+          if (!v.isInstanceOf[LoxClass]) {
+            throw RuntimeError(name, "Superclass must be a class")
+          }
+        }
+
         env.define(name.lexeme, NotAssigned)
+
+        superclass.foreach { sup =>
+          env = Environment.withEnclosing(env)
+          env.define("super", sup)
+        }
 
         val mmap: Map[String, LoxFn] = Map.from {
           methods.map { method =>
@@ -693,7 +721,11 @@ object Interpreter {  // singleton
           }
         }
 
-        env.assign(name, LoxClass(name.lexeme, mmap))
+        val cls = LoxClass(name.lexeme, superVal.map(_.asInstanceOf[LoxClass]), mmap)
+
+        if superclass.isDefined then env = env.enclosing.get
+
+        env.assign(name, cls)
       }
     }
   }
@@ -797,11 +829,10 @@ object Interpreter {  // singleton
       }
       case Expr.Get(expr, name) => {
         val obj = eval(expr)
-        if (obj.isInstanceOf[LoxInstance]) {
-          return obj.asInstanceOf[LoxInstance].get(name)
-        } else {
-          throw RuntimeError(name, "Only instances have properties.")
-        }
+        obj match
+          case instance: LoxInstance => instance.get(name)
+          case _ =>
+            throw RuntimeError(name, "Only instances have properties.")
       }
       case Expr.Set(obj, name, value) => {
         val objVal = eval(obj)
@@ -813,10 +844,16 @@ object Interpreter {  // singleton
         }
       }
       case Expr.This(keyword) => lookupVariable(keyword, expr)
+      case Expr.Super(keyword, methodToken) =>
+        val dist = locals(expr)
+        val superclass = env.getAt(dist, "super").asInstanceOf[LoxClass]
+        val obj = env.getAt(dist - 1, "this").asInstanceOf[LoxInstance]
+        val method = superclass.findMethod(methodToken.lexeme)
+        method.map(_.bind(obj)).getOrElse(throw RuntimeError(methodToken, s"Undefined property ${methodToken.lexeme}"))
     }
   }
 
-  def lookupVariable(name: Token, expr: Expr) = 
+  private def lookupVariable(name: Token, expr: Expr) =
     locals.get(expr)
     .fold { globals.get(name) } { depth => env.getAt(depth, name.lexeme) }
 

@@ -1,8 +1,10 @@
 package org.zlox.zlox.Main
 
-class LoxClass(val name: String, methods: Map[String, LoxFn]) extends LoxCallable {
+import scala.collection.mutable
+
+class LoxClass(val name: String, superclass: Option[LoxClass], methods: Map[String, LoxFn]) extends LoxCallable {
   def arity: Int = findMethod("init").map(_.arity).getOrElse(0)
-    
+
   def call(arguments: List[Any]): Any = {
     val instance = LoxInstance(this)
     val initializer = findMethod("init")
@@ -11,16 +13,16 @@ class LoxClass(val name: String, methods: Map[String, LoxFn]) extends LoxCallabl
   }
 
   def findMethod(name: String): Option[LoxFn] = {
-    methods.get(name)
+    methods.get(name).orElse(superclass.flatMap(_.findMethod(name)))
   }
 
-  override def toString(): String = name
+  override def toString: String = name
 }
 
 class LoxInstance(cls: LoxClass) {
   import collection.mutable.Map
 
-  final val fields: Map[String, Any] = Map()
+  private final val fields: mutable.Map[String, Any] = mutable.Map()
 
   def get(name: Token): Any = {
     fields.get(name.lexeme)
@@ -31,5 +33,5 @@ class LoxInstance(cls: LoxClass) {
   def set(name: Token, value: Any): Unit = {
     fields(name.lexeme) = value
   }
-  override def toString(): String = cls.name + " instance"
+  override def toString: String = cls.name + " instance"
 }
